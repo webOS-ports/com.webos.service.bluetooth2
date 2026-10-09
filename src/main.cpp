@@ -20,6 +20,9 @@
 #include "logging.h"
 #include "utils.h"
 
+#include <glib-unix.h>
+#include <signal.h>
+
 
 
 PmLogContext logContext;
@@ -35,26 +38,14 @@ static GOptionEntry options[] = {
 
 static GMainLoop *mainLoop = nullptr;
 
-extern "C" void term_handler(int signal)
+// Runs from the main loop, not in signal context: g_unix_signal_add()'s own
+// handler only wakes the loop, so a signal that arrives while the service is
+// already exiting (after the loop is gone) no longer calls into GLib.
+static gboolean term_handler(gpointer user_data)
 {
-	const char *str = nullptr;
-	switch (signal) {
-		case SIGTERM:
-			str = "SIGTERM";
-			break;
-		case SIGABRT:
-			str = "SIGABRT";
-			break;
-		case SIGINT:
-			str = "SIGINT";
-			break;
-		default:
-			str = "Unknown";
-			break;
-	}
-
-	BT_DEBUG("signal received.. signal[%s]", str);
+	BT_DEBUG("signal received.. signal[%s]", static_cast<const char *>(user_data));
 	g_main_loop_quit(mainLoop);
+	return G_SOURCE_CONTINUE;
 }
 
 int main(int argc, char **argv)
@@ -92,9 +83,9 @@ int main(int argc, char **argv)
 			abort();
 		}
 
-		signal(SIGTERM, term_handler);
-		signal(SIGINT, term_handler);
 		mainLoop = g_main_loop_new(NULL, FALSE);
+		g_unix_signal_add(SIGTERM, term_handler, const_cast<char *>("SIGTERM"));
+		g_unix_signal_add(SIGINT, term_handler, const_cast<char *>("SIGINT"));
 
 		BT_DEBUG("Starting bluetooth manager service");
 
@@ -104,6 +95,7 @@ int main(int argc, char **argv)
 		g_main_loop_run(mainLoop);
 
 		g_main_loop_unref(mainLoop);
+		mainLoop = nullptr;
 
 	}
 	catch (const std::length_error& le) // CID 163501 (#1 of 5): Uncaught exception (UNCAUGHT_EXCEPT)
