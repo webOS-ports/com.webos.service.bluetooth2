@@ -448,9 +448,22 @@ void BluetoothManagerAdapter::adapterKeepAliveStateChanged(bool enabled)
 
 void BluetoothManagerAdapter::deviceFound(BluetoothPropertiesList properties)
 {
-	BluetoothDevice *device = new BluetoothDevice(properties);
+	BluetoothDevice *found = new BluetoothDevice(properties);
 	BT_DEBUG("Found a new device");
-	mDevices.insert(std::pair<std::string, BluetoothDevice*>(device->getAddress(), device));
+
+	// A device that is already known is updated: the insert used to fail, leaking the new object, and the
+	// notification reported the leaked copy instead of the stored one.
+	BluetoothDevice *device = findDevice(found->getAddress());
+	if (device)
+	{
+		device->update(properties);
+		delete found;
+	}
+	else
+	{
+		device = found;
+		mDevices.insert(std::pair<std::string, BluetoothDevice*>(device->getAddress(), device));
+	}
 
 	notifySubscribersFilteredDevicesChanged();
 	notifySubscribersDevicesChanged();
@@ -459,15 +472,17 @@ void BluetoothManagerAdapter::deviceFound(BluetoothPropertiesList properties)
 
 void BluetoothManagerAdapter::deviceFound(const std::string &address, BluetoothPropertiesList properties)
 {
-    auto device = findDevice(address);
-    if (!device) {
-        BluetoothDevice *device = new BluetoothDevice(properties);
+	auto device = findDevice(address);
+	if (!device) {
+		// Assigned, not declared again: the inner declaration shadowed this one, and a new device was
+		// announced as null, an empty "device" object.
+		device = new BluetoothDevice(properties);
 		BT_DEBUG("Found a new device");
 		mDevices.insert(std::pair<std::string, BluetoothDevice*>(device->getAddress(), device));
-    }
-    else {
-        device->update(properties);
-    }
+	}
+	else {
+		device->update(properties);
+	}
 
 	notifySubscribersFilteredDevicesChanged();
 	notifySubscribersDevicesChanged();
@@ -503,6 +518,9 @@ void BluetoothManagerAdapter::deviceRemoved(const std::string &address)
 	BluetoothDevice *device = deviceIter->second;
 	bool pairedState = device->getPaired();
 	mDevices.erase(deviceIter);
+	// The pair state keeps a pointer to the device being paired; it was left dangling, and ending the
+	// pairing later wrote to the deleted device.
+	mPairState.forgetDevice(device);
 	delete device;
 	notifySubscribersFilteredDevicesChanged();
 	notifySubscribersDevicesChanged();
@@ -774,7 +792,7 @@ void BluetoothManagerAdapter::handleStatePropertiesSet(BluetoothPropertiesList /
 	LSUtils::postToClient(request, responseObj);
 }
 
-void BluetoothManagerAdapter::handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, BluetoothDevice *device, LS::Message &request, BluetoothError error)
+void BluetoothManagerAdapter::handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, const std::string &deviceAddress, LS::Message &request, BluetoothError error)
 {
 	BT_INFO("MANAGER_SERVICE", 0, "Return of handleDeviceStatePropertiesSet is %d", error);
 
@@ -784,6 +802,9 @@ void BluetoothManagerAdapter::handleDeviceStatePropertiesSet(BluetoothProperties
 		return;
 	}
 
+	// Looked up again: the device can be removed while the properties are being set; the callback used to
+	// hold the raw pointer.
+	BluetoothDevice *device = findDevice(deviceAddress);
 	pbnjson::JValue responseObj = pbnjson::Object();
 	responseObj.put("adapterAddress", mAddress);
 	if (device && device->update(properties))
@@ -1473,7 +1494,7 @@ bool BluetoothManagerAdapter::setDeviceState(LS::Message &request, pbnjson::JVal
 	if (propertiesToChange.size() == 0)
 		LSUtils::respondWithError(request, BT_ERR_NO_PROP_CHANGE);
 	else
-		mAdapter->setDeviceProperties(address, propertiesToChange, std::bind(&BluetoothManagerAdapter::handleDeviceStatePropertiesSet, this, propertiesToChange, device, request, _1));
+		mAdapter->setDeviceProperties(address, propertiesToChange, std::bind(&BluetoothManagerAdapter::handleDeviceStatePropertiesSet, this, propertiesToChange, address, request, _1));
 
 	return true;
 }
@@ -1627,7 +1648,7 @@ bool BluetoothManagerAdapter::cancelPairing(LS::Message &request, pbnjson::JValu
 		return true;
 	}
 
-	if (mPairState.getDevice()->getAddress() != address)
+	if (!mPairState.getDevice() || mPairState.getDevice()->getAddress() != address)
 	{
 		LSUtils::respondWithError(request, BT_ERR_NO_PAIRING_FOR_REQUESTED_ADDRESS);
 		return true;
@@ -2077,7 +2098,7 @@ void BluetoothManagerAdapter::notifyStartScanListenerDropped(uint32_t scanId)
 		mAdapter->cancelLeDiscovery();
 }
 
-void BluetoothManagerAdapter::cancelDiscoveryCallback(BluetoothDevice *device, BluetoothError error)
+void BluetoothManagerAdapter::cancelDiscoveryCallback(const std::string &deviceAddress, BluetoothError error)
 {
 	pbnjson::JValue responseObj = pbnjson::Object();
 
@@ -2118,7 +2139,7 @@ void BluetoothManagerAdapter::cancelDiscoveryCallback(BluetoothDevice *device, B
 			if (!getDiscoveringState())
 			{
 				BT_DEBUG("%s: Discovery state is disabled", __func__);
-				std::string address = device->getAddress();
+				std::string address = deviceAddress;
 				auto pairCallback = [this](BluetoothError error)
 				{
 					pbnjson::JValue responseObj = pbnjson::Object();
@@ -2179,8 +2200,10 @@ void BluetoothManagerAdapter::startPairing(BluetoothDevice *device)
 	notifySubscribersFilteredDevicesChanged();
 	notifySubscribersDevicesChanged();
 
-	// Device discovery needs to be stopped for pairing
-	getAdapter()->cancelDiscovery(std::bind(&BluetoothManagerAdapter::cancelDiscoveryCallback, this, device, _1));
+	// Device discovery needs to be stopped for pairing. The callback gets the address, not the device: the
+	// device can be removed before discovery has stopped.
+	getAdapter()->cancelDiscovery(std::bind(&BluetoothManagerAdapter::cancelDiscoveryCallback, this,
+	                                        device ? device->getAddress() : std::string(), _1));
 }
 
 void BluetoothManagerAdapter::stopPairing()

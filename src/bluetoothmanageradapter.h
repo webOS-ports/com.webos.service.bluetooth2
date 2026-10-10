@@ -97,7 +97,7 @@ public:
 	bool setDeviceState(LS::Message &request, pbnjson::JValue &requestObj);
 
 	void handleStatePropertiesSet(BluetoothPropertiesList properties, LS::Message &request, BluetoothError error);
-	void handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, BluetoothDevice *device, LS::Message &request, BluetoothError error);
+	void handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, const std::string &deviceAddress, LS::Message &request, BluetoothError error);
 
 	void cancelIncomingPairingSubscription();
 
@@ -164,7 +164,7 @@ public:
 
 	void startPairing(BluetoothDevice *device);
 	void stopPairing();
-	void cancelDiscoveryCallback(BluetoothDevice *device, BluetoothError error);
+	void cancelDiscoveryCallback(const std::string &deviceAddress, BluetoothError error);
 	void beginIncomingPair(const std::string &address);
 
 private:

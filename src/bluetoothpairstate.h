@@ -46,6 +46,8 @@ public:
 
 	void stopPairing();
 	void startPairing(BluetoothDevice* device);
+	// Drops the device if it is the one being paired, keeping the pairing state.
+	void forgetDevice(const BluetoothDevice *device) { if (mDevice == device) mDevice = 0; }
 
 	void markAsOutgoing() { mIncoming = false; }
 	void markAsIncoming() { mIncoming = true; }
