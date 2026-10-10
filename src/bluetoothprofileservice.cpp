@@ -830,6 +830,8 @@ bool BluetoothProfileService::enable(LSMessage &message)
 	auto adapter = mManager->findAdapterInfo(adapterAddress);
 	if(adapter && !adapter->getPowerState())
 	{
+		// Answer: the request used to be dropped without a reply.
+		LSUtils::respondWithError(request, BT_ERR_ADAPTER_TURNED_OFF);
 		return true;
 	}
 
@@ -839,55 +841,70 @@ bool BluetoothProfileService::enable(LSMessage &message)
 		role = convertToLower(requestObj["role"].asString());
 	}
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
 	if(role.length() > 0 && getManager()->isRoleEnable(adapterAddress, role))
 	{
 		LSUtils::respondWithError(request, BT_ERR_PROFILE_ENABLED);
 		return true;
 	}
 
-	auto enableCallback = [this, impl, requestMessage, adapterAddress](BluetoothError error) {
+	initialize();
+
+	// initialize() can provide the implementation that was missing above.
+	if (!impl)
+		impl = findImpl(adapterAddress);
+	if (!impl)
+	{
+		LSUtils::respondWithError(request, BT_ERR_PROFILE_UNAVAIL);
+		return true;
+	}
+
+	auto roles = std::make_shared<std::vector<std::string>>(strToProfileRole(role));
+	if (roles->empty())
+	{
+		LSUtils::respondWithError(request, BT_ERR_BAD_JSON);
+		return true;
+	}
+
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+	applyRoles(roles, impl, requestMessage, adapterAddress, true);
+	return true;
+}
+
+// Enables or disables the roles of one request, last first, one SIL call at a time, then answers it. The
+// roles and the follow-up callback used to be members shared by every request: two requests in flight
+// popped each other's roles, popped an empty vector, and answered one request twice and the other never.
+void BluetoothProfileService::applyRoles(std::shared_ptr<std::vector<std::string>> roles, BluetoothProfile *impl,
+                                         LSMessage *requestMessage, const std::string &adapterAddress, bool enable)
+{
+	auto callback = [this, roles, impl, requestMessage, adapterAddress, enable](BluetoothError error) {
 		LS::Message request(requestMessage);
-		mEnabledRoles.pop_back();
+		roles->pop_back();
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
-			mEnabledRoles.clear();
 			LSUtils::respondWithError(request, error);
-			LSMessageUnref(request.get());
+			LSMessageUnref(requestMessage);
 			return;
 		}
-		if(mEnabledRoles.size() > 0)
-		{
-			impl->enable(mEnabledRoles.back(), mCallback);
-			return;
-		}
-		pbnjson::JValue responseObj = pbnjson::Object();
 
+		if (!roles->empty())
+		{
+			applyRoles(roles, impl, requestMessage, adapterAddress, enable);
+			return;
+		}
+
+		pbnjson::JValue responseObj = pbnjson::Object();
 		responseObj.put("returnValue", true);
 		responseObj.put("adapterAddress", adapterAddress);
-
 		LSUtils::postToClient(request, responseObj);
-
-		LSMessageUnref(request.get());
+		LSMessageUnref(requestMessage);
 	};
 
-	initialize();
-
-	if(impl)
-	{
-		mEnabledRoles = strToProfileRole(role);
-		if(mEnabledRoles.size() == 0)
-		{
-			LSUtils::respondWithError(request, BT_ERR_BAD_JSON);
-			return true;
-		}
-		mCallback = enableCallback;
-		impl->enable(mEnabledRoles.back(), mCallback);
-	}
-	return true;
+	if (enable)
+		impl->enable(roles->back(), callback);
+	else
+		impl->disable(roles->back(), callback);
 }
 
 bool BluetoothProfileService::disable(LSMessage &message)
@@ -932,42 +949,16 @@ bool BluetoothProfileService::disable(LSMessage &message)
 		return true;
 	}
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
-	auto disableCallback = [this, impl, requestMessage, adapterAddress](BluetoothError error) {
-		LS::Message request(requestMessage);
-		mEnabledRoles.pop_back();
-
-		if (error != BLUETOOTH_ERROR_NONE)
-		{
-			mEnabledRoles.clear();
-			LSUtils::respondWithError(request, error);
-			LSMessageUnref(request.get());
-			return;
-		}
-		if(mEnabledRoles.size() > 0)
-		{
-			impl->disable(mEnabledRoles.back(), mCallback);
-			return;
-		}
-		pbnjson::JValue responseObj = pbnjson::Object();
-
-		responseObj.put("returnValue", true);
-		responseObj.put("adapterAddress", adapterAddress);
-
-		LSUtils::postToClient(request, responseObj);
-		LSMessageUnref(request.get());
-	};
-
-	mEnabledRoles = strToProfileRole(role);
-	if(mEnabledRoles.size() == 0)
+	auto roles = std::make_shared<std::vector<std::string>>(strToProfileRole(role));
+	if (roles->empty())
 	{
 		LSUtils::respondWithError(request, BT_ERR_BAD_JSON);
 		return true;
 	}
-	mCallback = disableCallback;
-	impl->disable(mEnabledRoles.back(), mCallback);
+
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+	applyRoles(roles, impl, requestMessage, adapterAddress, false);
 
 	return true;
 }

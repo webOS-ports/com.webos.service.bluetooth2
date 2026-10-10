@@ -18,6 +18,7 @@
 #ifndef BLUETOOTH_PROFILE_SERVICE_H_
 #define BLUETOOTH_PROFILE_SERVICE_H_
 
+#include <memory>
 #include <string>
 #include <map>
 #include <vector>
@@ -128,8 +129,8 @@ private:
 	std::vector<std::string> mUuids;
 	std::vector<std::string> mConnectingDevices;
 	std::vector<std::string> mConnectedDevices;
-	std::vector<std::string> mEnabledRoles;
-	BluetoothResultCallback mCallback;
+	void applyRoles(std::shared_ptr<std::vector<std::string>> roles, BluetoothProfile *impl,
+	                LSMessage *requestMessage, const std::string &adapterAddress, bool enable);
 
 	std::map<std::string, std::vector<std::string>> mConnectedDevicesForMultipleAdapters;
 	std::map<std::string, std::vector<std::string>> mConnectingDevicesForMultipleAdapters;
