@@ -341,7 +341,7 @@ bool BluetoothGattAncsProfile::connectCallback(LSMessage *requestMessage, const 
 		{
 			LSUtils::respondWithError(requestMessage, BT_ERR_GATT_SERVICE_DISCOVERY_FAIL);
 			LSMessageUnref(requestMessage);
-			mImpl->disconnect(address, std::bind(&BluetoothGattAncsProfile::disconnectCallback, this, requestMessage, adapterAddress, address, true, _1));
+			mImpl->disconnect(address, std::bind(&BluetoothGattAncsProfile::disconnectCallback, this, nullptr, adapterAddress, address, true, _1));
 			return;
 		}
 
@@ -355,9 +355,10 @@ bool BluetoothGattAncsProfile::connectCallback(LSMessage *requestMessage, const 
 			if (!thisRef->isAncsServiceSupported(timeoutData->requestMessage, timeoutData->adapterAddress, timeoutData->address))
 			{
 				thisRef->mImpl->disconnect(timeoutData->address,
-						std::bind(&BluetoothGattAncsProfile::disconnectCallback, thisRef, timeoutData->requestMessage, timeoutData->adapterAddress, timeoutData->address, true, _1));
+						std::bind(&BluetoothGattAncsProfile::disconnectCallback, thisRef, nullptr, timeoutData->adapterAddress, timeoutData->address, true, _1));
 				LSUtils::respondWithError(request, BT_ERR_PROFILE_CONNECT_FAIL);
 				LSMessageUnref(timeoutData->requestMessage);
+				DELETE_OBJ(timeoutData)	// leaked here
 				return false;
 			}
 			thisRef->markDeviceAsNotConnecting(timeoutData->address);
@@ -418,11 +419,17 @@ void BluetoothGattAncsProfile::disconnectCallback(LSMessage *requestMessage, con
 {
 
 	BT_INFO("ANCS", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
-	LS::Message request(requestMessage);
 
+	// A quiet disconnect follows a failed connect whose request has been answered and released already: it
+	// used to be passed here anyway and answered again after its last reference was gone. A disconnect
+	// request is answered and released here; its reference used to leak.
 	if (error != BLUETOOTH_ERROR_NONE)
 	{
-		LSUtils::respondWithError(request, BT_ERR_PROFILE_DISCONNECT_FAIL);
+		if (!quietDisconnect && requestMessage)
+		{
+			LSUtils::respondWithError(requestMessage, BT_ERR_PROFILE_DISCONNECT_FAIL);
+			LSMessageUnref(requestMessage);
+		}
 		return;
 	}
 	auto unpairCallback = [ ](BluetoothError error) {
@@ -440,13 +447,14 @@ void BluetoothGattAncsProfile::disconnectCallback(LSMessage *requestMessage, con
 
 	markDeviceAsNotConnecting(address);
 	markDeviceAsNotConnected(address);
-	if (!quietDisconnect)
+	if (!quietDisconnect && requestMessage)
 	{
 		pbnjson::JValue responseObj = pbnjson::Object();
 		responseObj.put("returnValue", true);
 		responseObj.put("adapterAddress", adapterAddress);
 		responseObj.put("address", address);
-		LSUtils::postToClient(request, responseObj);
+		LSUtils::postToClient(requestMessage, responseObj);
+		LSMessageUnref(requestMessage);
 	}
 
 	notifyStatusSubscribers(adapterAddress, address, false);
@@ -749,13 +757,16 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 			LS::SubscriptionPoint *subscriptionPoint = notificationIter->second;
 			BluetoothGattValue values = characteristic.getValue();
 			BT_DEBUG("Found notification source characteristic value of size %zu", values.size());
+			// Eight bytes from the remote device, which were read whatever it had sent.
+			if (values.size() < 8)
+				return;
 
 			int eventID = (int32_t) values[0];
 			int eventFlags = (int32_t) values[1];
 			int categoryID = (int32_t) values[2];
 			int categoryCount = (int32_t) values[3];
 
-			int32_t notificationUid = values[4] | (values[5] << 8) | (values[6] << 16) | (values[7] << 24);
+			int32_t notificationUid = (int32_t)(values[4] | (values[5] << 8) | (values[6] << 16) | ((uint32_t)values[7] << 24));
 
 			//Build response
 			pbnjson::JValue responseObj = pbnjson::Object();
@@ -813,6 +824,9 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 			BT_DEBUG("ANCS QueryInfo object empty");
 			return;
 		}
+		// Every read below is bounded by what the remote device sent; several were not.
+		if (vSize == 0)
+			return;
 		//Ancs block sizes are roughly 155 bytes long. When queried for multiple notification attributes,  the combined response length can
 		//exceed this block size or message size may be longer than max block size.
 		//Ancs chunks the response with only the first block containing the COMMAND_ID, and subsequent blocks containing only contiguous data
@@ -826,7 +840,7 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 				BT_DEBUG("ANCS data source characteristic value  has no attribute");
 				return;
 			}
-			int32_t notificationId = values[index + 1] | (values[index + 2] << 8) | (values[index + 3] << 16) | (values[index + 4] << 24);
+			int32_t notificationId = (int32_t)(values[index + 1] | (values[index + 2] << 8) | (values[index + 3] << 16) | ((uint32_t)values[index + 4] << 24));
 			index += 5;
 			BT_DEBUG("ANCS notificationId=%d", notificationId);
 
@@ -837,6 +851,8 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 			{
 				//Case 3:Previous block: [0 to n :attr1-id-data][n+1 to (vSize -2): attr2 id and data][vsize-1: attr3 Id]
 				//		 Current block:  [0 and 1: attr3 len_bytes_1_2][[1-n: attr3 data]....
+				if (vSize < 2)
+					return;
 				mNotificationQueryInfo->remainingLen = values[index] | (values[index + 1] << 8);
 				index += 2;
 			}
@@ -856,11 +872,13 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 			{
 				if (attrStatus->attrId == mNotificationQueryInfo->readingAttr)
 				{
+					// What is left of this block after the length bytes, not the whole block.
 					size_t len = mNotificationQueryInfo->remainingLen;
-					if (len > values.size())
+					size_t available = (size_t)(vSize - index);
+					if (len > available)
 					{
-						mNotificationQueryInfo->remainingLen = len - values.size();
-						len = values.size();
+						mNotificationQueryInfo->remainingLen = (int)(len - available);
+						len = available;
 					}
 					else
 					{
@@ -880,14 +898,15 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 		{
 			int32_t attrId = values[index++];
 			mNotificationQueryInfo->readingAttr = attrId;
+			// In this order: with the attribute id as the last byte, the length byte was read past the end.
+			if (index >= vSize)
+			{ //last byte was attrId
+				break;
+			}
 			if (index+1 >= vSize)
 			{
 				//last byte was 1st byte of attrLen
 				mNotificationQueryInfo->attrLenByte1 = values[index++];
-				break;
-			}
-			if (index >= vSize)
-			{ //last byte was attrId
 				break;
 			}
 			int32_t attributeLen = values[index] | (values[index + 1] << 8);
@@ -1205,7 +1224,8 @@ bool BluetoothGattAncsProfile::queryNotificationAttributes(LSMessage &message)
 			BT_DEBUG("[%s](%d) getImpl->writeCharacteristic\n", __FUNCTION__, __LINE__);
 			thisRef->getImpl<BluetoothGattProfile>(timeoutData->adapterAddress)->writeCharacteristic(timeoutData->address, thisRef->mAncsUuid, timeoutData->characteristic, writeCharacteristicCallback);
 
-			return true;
+			// Once: the write callback frees timeoutData. Returning true repeated the timer on the freed data.
+			return false;
 		};
 
 	g_timeout_add_seconds(WRITE_TIMEOUT, (GSourceFunc) serviceTimeoutCallback, (gpointer) timeoutData);
