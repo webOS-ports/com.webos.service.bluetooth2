@@ -88,3 +88,10 @@ webos_build_daemon()
 webos_build_system_bus_files()
 webos_build_db8_files()
 webos_build_configured_file(files/conf/pmlog/webos-bluetooth-service.conf SYSCONFDIR pmlog.d)
+
+# Unit tests: off by default, so image builds are unaffected (cmake -DBUILD_TESTING=ON).
+option(BUILD_TESTING "Build the unit tests" OFF)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

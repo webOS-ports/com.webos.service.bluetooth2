@@ -30,14 +30,18 @@
 #include <gio/gio.h>
 #include <glib-object.h>
 
+#ifndef BINARY_SOCKET_DIRECTORY	// the unit tests use their own
 #define BINARY_SOCKET_DIRECTORY         "/dev/bluetooth"
+#endif
 #define BINARY_SOCKET_FILE_NAME_PREFIX  "binarySocketPath"
 #define BINARY_SOCKET_FILE_NAME_SIZE    64
 #define DEFAULT_LISTEN_BACKLOG          5
 #define READ_BUFFER_SIZE                1024
 #define DATA_BUFFER_SIZE                1024*5
 #define MAX_WRITE_RETRY_COUNT           1000
+#ifndef WRITE_RETRY_SLEEP_TIME	// the unit tests use their own
 #define WRITE_RETRY_SLEEP_TIME          10000
+#endif
 
 typedef std::function<void(guchar *readBuf, gsize readLen)> BluetoothBinarySocketReceiveCallback;
 
