@@ -712,8 +712,9 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 	{
 		BT_INFO("MESH", 0, "network already exists, token : %s: [%s : %d]", meshToken.c_str(),
 				 __FUNCTION__, __LINE__);
-		mNetworkCreated = true;
-		impl->attach("PB-ADV", meshToken);
+		// Only when the attach started (meshd may not run yet): a call made later tries again. One that fails
+		// later comes back through attachResult.
+		mNetworkCreated = impl->attach("PB-ADV", meshToken) == BLUETOOTH_ERROR_NONE;
 		LSUtils::respondWithError(request, BLUETOOTH_ERROR_MESH_NETWORK_EXISTS);
 		return true;
 	}
