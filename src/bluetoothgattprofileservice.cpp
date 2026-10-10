@@ -3137,6 +3137,7 @@ void BluetoothGattProfileService::addLocalService(const BluetoothUuid applicatio
 		if(!addLocalServer(applicationUuid, newServer, adapterAddress))
 		{
 			BT_ERROR("GATT_SERVICE_ALREADY_REGISTERED", 0, "addLocalServer is failed");
+			delete newServer;	// was leaked
 			safe_callback(callback, BLUETOOTH_ERROR_FAIL);
 			return;
 		}

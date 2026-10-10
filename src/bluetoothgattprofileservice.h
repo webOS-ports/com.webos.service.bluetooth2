@@ -528,8 +528,8 @@ private:
 	void handleMonitorCharacteristicClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);
 	void handleMonitorCharacteristicsClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);
 	bool isDescriptorValid(const std::string &address, const uint16_t &handle, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
-	bool isDescriptorValid(const std::string &address, const std::string &serviceUuid, const std::string &descriptorUuuid,
-	                       const std::string &characteristicUuid, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
+	bool isDescriptorValid(const std::string &address, const std::string &serviceUuid, const std::string &characteristicUuid,
+	                       const std::string &descriptorUuid, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
 	void removeSubscriptionPoint(const std::string &adapterAddress, const std::string &address);
 
 	std::unordered_map<std::string, LS::SubscriptionPoint*> mGetServicesSubscriptions;
