@@ -304,14 +304,13 @@ class BluetoothGattProfileService : public BluetoothProfileService,
 			return true;
 		}
 
-        void removeAllLocalService()
-        {
-            for(auto serviceIter : mLocalServices)
-			{
-                delete serviceIter.second;
-                mLocalServices.erase(serviceIter.first);
-            }
-        }
+		void removeAllLocalService()
+		{
+			// Erasing by key inside a range-for freed the node the loop was about to advance from.
+			for (auto &serviceIter : mLocalServices)
+				delete serviceIter.second;
+			mLocalServices.clear();
+		}
 
 		LocalService* findLocalService(uint16_t serviceId)
 		{

@@ -2207,8 +2207,6 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 		return true;
 	}
 
-	LSUtils::ClientWatch *monitorCharacteristicsWatch;
-	monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(),nullptr);
 
 	uint16_t appId = 0;
 	uint16_t connectId = 0;
@@ -2279,6 +2277,8 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 	//two entries in the mMonitorCharacteristicSubscriptions list. Now if the second app drops subscription, the first entry of the
 	//combination is picked up in the list iteration and the wrong watch is dropped. To avoid this, the client watch object is saved
 	//and verified before dropping the subscription.
+	// Created once the request has been validated: the early error returns above leaked it.
+	LSUtils::ClientWatch *monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(), nullptr);
 	monitorCharacteristicsWatch->setCallback (std::bind(&BluetoothGattProfileService::handleMonitorCharacteristicClientDropped, this, subscriptionInfo, monitorCharacteristicsWatch));
 
 	mMonitorCharacteristicSubscriptions.push_back(std::make_pair(monitorCharacteristicsWatch, subscriptionInfo));
@@ -2385,7 +2385,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		else if (!requestObj.hasKey("subscribe"))
 			LSUtils::respondWithError(request, BT_ERR_MTHD_NOT_SUBSCRIBED);
 
-		if (!requestObj.hasKey("service"))
+		else if (!requestObj.hasKey("service"))
 			LSUtils::respondWithError(request, BT_ERR_GATT_SERVICE_NAME_PARAM_MISSING);
 
 		else if (!requestObj.hasKey("characteristics"))
@@ -2407,8 +2407,6 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		return true;
 	}
 
-	LSUtils::ClientWatch *monitorCharacteristicsWatch;
-	monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(),nullptr);
 
 	uint16_t appId = 0;
 	uint16_t connectId = 0;
@@ -2470,6 +2468,8 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 	//two entries in the mMonitorCharacteristicSubscriptions list. Now if the second app drops subscription, the first entry of the
 	//combination is picked up in the list iteration and the wrong watch is dropped. To avoid this, the client watch object is saved
 	//and verified before dropping the subscription.
+	// Created once the request has been validated: the early error returns above leaked it.
+	LSUtils::ClientWatch *monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(), nullptr);
 	monitorCharacteristicsWatch->setCallback (std::bind(&BluetoothGattProfileService::handleMonitorCharacteristicsClientDropped, this, subscriptionInfo, monitorCharacteristicsWatch));
 
 	mMonitorCharacteristicSubscriptions.push_back(std::make_pair(monitorCharacteristicsWatch, subscriptionInfo));
@@ -2588,17 +2588,18 @@ bool BluetoothGattProfileService::isDescriptorValid(const std::string &address, 
 
 void BluetoothGattProfileService::removeSubscriptionPoint(const std::string &adapterAddress, const std::string &devAddress)
 {
-	if (mConnectSubsMap.find(adapterAddress) != mConnectSubsMap.end())
+	auto adapterSubs = mConnectSubsMap.find(adapterAddress);
+	if (adapterSubs == mConnectSubsMap.end())
+		return;
+
+	// The erase used to be outside this check, so a device without a connect subscription (a connect
+	// without subscribe, then disconnect) erased end(), which is undefined behaviour on a std::map.
+	auto iter = adapterSubs->second.find(devAddress);
+	if (iter != adapterSubs->second.end())
 	{
-		auto iter = mConnectSubsMap[adapterAddress].find(devAddress);
-		if (iter != mConnectSubsMap[adapterAddress].end())
-		{
-			LS::SubscriptionPoint* sPtr = mConnectSubsMap[adapterAddress][devAddress].first;
-			GattConnSubsInfo* gPtr = mConnectSubsMap[adapterAddress][devAddress].second;
-			delete sPtr;
-			delete gPtr;
-		}
-		mConnectSubsMap[adapterAddress].erase(iter);
+		delete iter->second.first;
+		delete iter->second.second;
+		adapterSubs->second.erase(iter);
 	}
 }
 
@@ -3376,10 +3377,12 @@ bool BluetoothGattProfileService::removeLocalServer(uint16_t serverId, const std
 		if(serverIter.second->id == serverId)
 		{
 			BT_DEBUG("[%s](%d) getImpl->removeApplication\n", __FUNCTION__, __LINE__);
+			// The server is erased below in both cases, so it is freed in both cases; on a failed
+			// removeApplication it used to leak. Its services are freed only on that path: callbacks
+			// still in flight may hold raw LocalService pointers (see addService).
 			if(!getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(server->id, ApplicationType::SERVER))
 				server->removeAllLocalService();
-			else
-				delete server;
+			delete server;
 
 			mLocalServer.erase(serverIter.first);
 			break;
