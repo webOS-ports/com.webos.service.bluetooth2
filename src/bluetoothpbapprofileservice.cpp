@@ -485,6 +485,14 @@ bool BluetoothPbapProfileService::setPhoneBook(LSMessage &message)
 	std::string repository = requestObj["repository"].asString();
 	std::string object = requestObj["object"].asString();
 
+	// Both become folder names under the storage directory: "../../../var/lib/x" used to create, and
+	// later write into, directories anywhere the service can write.
+	if (!isSinglePathComponent(repository) || !isSinglePathComponent(object))
+	{
+		LSUtils::respondWithError(request, BT_ERR_SCHEMA_VALIDATION_FAIL);
+		return true;
+	}
+
 	setFolderRepository(repository);
 	setFolderObject(object);
 
@@ -1120,7 +1128,8 @@ bool BluetoothPbapProfileService::pullvCard(LSMessage &message)
 
 	std::string check_destinationFile;
 
-	if (requestObj.hasKey("vCardVersion"))
+	// destinationFile was only read when vCardVersion was given as well.
+	if (requestObj.hasKey("destinationFile"))
 	{
 		check_destinationFile = requestObj["destinationFile"].asString();
 		if(check_destinationFile.empty())
@@ -1402,11 +1411,15 @@ void BluetoothPbapProfileService::appendGenericPullResponse(pbnjson::JValue &res
 
 std::string BluetoothPbapProfileService::buildStorageDirPath(const std::string &path, const std::string &address)
 {
+	std::string deviceFolder = replaceString(convertToLower(address),":","_");
+	if (!isSinglePathComponent(deviceFolder))
+		return "";
+
 	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
 	result += "/";
 	result += "pbap";
 	result += "/";
-	result += replaceString(convertToLower(address),":","_");
+	result += deviceFolder;
 	result += "/";
 	result += getFolderRepository();
 	result += "/";
@@ -1416,7 +1429,8 @@ std::string BluetoothPbapProfileService::buildStorageDirPath(const std::string &
 	{
 		BT_DEBUG("failed to create folder: %s", result.c_str());
 	}
-	result += path;
-	return result;
+
+	// Empty, which the callers reject, when the client's file name would leave the phone book folder.
+	return resolvePathUnderDirectory(result, path);
 }
 

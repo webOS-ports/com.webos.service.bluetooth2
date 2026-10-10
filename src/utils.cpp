@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 
@@ -87,10 +88,111 @@ bool checkFileIsValid(const std::string &path)
 	if (testPath.length() == 0)
 		return false;
 
-	if (g_file_test(path.c_str(), (GFileTest) G_FILE_TEST_IS_SYMLINK))
+	// A regular file, not a link to one. g_file_test() with EXISTS | IS_REGULAR is true when either test
+	// passes, so it accepted directories, FIFOs and device nodes (an endless transfer of /dev/zero).
+	struct stat st;
+	if (lstat(testPath.c_str(), &st) != 0)
 		return false;
 
-	return  g_file_test(testPath.c_str(), (GFileTest)(G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR));
+	return S_ISREG(st.st_mode);
+}
+
+bool isContainedRelativePath(const std::string &path)
+{
+	if (path.empty() || path[0] == '/')
+		return false;
+
+	std::size_t start = 0;
+	while (start <= path.size())
+	{
+		std::size_t end = path.find('/', start);
+		if (end == std::string::npos)
+			end = path.size();
+		const std::string component = path.substr(start, end - start);
+		if (component == "." || component == "..")
+			return false;
+		start = end + 1;
+	}
+	return true;
+}
+
+bool isSinglePathComponent(const std::string &name)
+{
+	return !name.empty() && name.find('/') == std::string::npos && name != "." && name != "..";
+}
+
+static bool isUnderDirectory(const std::string &resolvedPath, const std::string &baseDir)
+{
+	char *base = realpath(baseDir.c_str(), nullptr);
+	if (!base)
+		return false;
+	std::string resolvedBase = base;
+	free(base);
+
+	if (resolvedPath == resolvedBase)
+		return true;
+	if (resolvedBase.back() != '/')
+		resolvedBase += '/';
+	return resolvedPath.compare(0, resolvedBase.size(), resolvedBase) == 0;
+}
+
+bool resolveUnderDirectory(const std::string &path, const std::string &baseDir, std::string &resolved)
+{
+	if (path.empty())
+		return false;
+
+	char *real = realpath(path.c_str(), nullptr);
+	if (!real)
+		return false;
+	std::string resolvedPath = real;
+	free(real);
+
+	if (!isUnderDirectory(resolvedPath, baseDir))
+		return false;
+
+	resolved = resolvedPath;
+	return true;
+}
+
+bool resolveParentUnderDirectory(const std::string &path, const std::string &baseDir, std::string &resolved)
+{
+	if (path.empty() || path.back() == '/')
+		return false;
+
+	gchar *dir = g_path_get_dirname(path.c_str());
+	gchar *name = g_path_get_basename(path.c_str());
+	std::string fileName = name ? name : "";
+	std::string resolvedDir;
+	bool ok = dir && resolveUnderDirectory(dir, baseDir, resolvedDir) && isSinglePathComponent(fileName);
+	g_free(dir);
+	g_free(name);
+
+	if (!ok)
+		return false;
+
+	resolved = resolvedDir + "/" + fileName;
+	return true;
+}
+
+std::string resolvePathUnderDirectory(const std::string &baseDir, const std::string &relativePath)
+{
+	if (!isContainedRelativePath(relativePath))
+		return "";
+
+	std::string full = baseDir + "/" + relativePath;
+	std::string resolved;
+	if (resolveUnderDirectory(full, baseDir, resolved))
+		return resolved;
+
+	// Not there yet, a destination: its directory must be, and the name must not be an entry that did not
+	// resolve inside, like a dangling link.
+	struct stat st;
+	if (lstat(full.c_str(), &st) == 0)
+		return "";
+	if (resolveParentUnderDirectory(full, baseDir, resolved))
+		return resolved;
+
+	return "";
 }
 
 /**

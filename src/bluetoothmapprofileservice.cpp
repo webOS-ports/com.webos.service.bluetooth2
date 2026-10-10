@@ -1301,18 +1301,23 @@ bool BluetoothMapProfileService::isGetMessageSchemaAvailable(LS::Message &reques
 
 std::string BluetoothMapProfileService::buildStorageDirPath(const std::string &path, const std::string &address)
 {
+	std::string deviceFolder = replaceString(convertToLower(address),":","_");
+	if (!isSinglePathComponent(deviceFolder))
+		return "";
+
 	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
 	result += "/";
 	result += "map";
 	result += "/";
-	result += replaceString(convertToLower(address),":","_");
+	result += deviceFolder;
 	result += "/";
 	if (g_mkdir_with_parents(result.c_str(), 0755) != 0)
 	{
 		BT_DEBUG("failed to create folder: %s", result.c_str());
 	}
-	result += path;
-	return result;
+
+	// Empty, which the callers reject, when the client's file name would leave the device folder.
+	return resolvePathUnderDirectory(result, path);
 }
 
 bool BluetoothMapProfileService::setMessageStatus(LSMessage &message)
@@ -1412,7 +1417,19 @@ bool BluetoothMapProfileService::pushMessage(LSMessage &message)
 		return true;
 	}
 
-	std::string sourceFile = requestObj["sourceFile"].asString();
+	// The file is read and sent to the remote device: it has to be in the storage directory, as for OPP.
+	// Any file the service could read used to be accepted, also through a symbolic link.
+	std::string requestedSourceFile = requestObj["sourceFile"].asString();
+	std::string sourceFile;
+	if (g_path_is_absolute(requestedSourceFile.c_str()))
+	{
+		if (!resolveUnderDirectory(requestedSourceFile, WEBOS_MOUNTABLESTORAGEDIR, sourceFile))
+			sourceFile.clear();
+	}
+	else
+	{
+		sourceFile = resolvePathUnderDirectory(WEBOS_MOUNTABLESTORAGEDIR, requestedSourceFile);
+	}
 	std::string folder = requestObj["folder"].asString();
 
 	std::string charset = "utf8";
@@ -1435,7 +1452,7 @@ bool BluetoothMapProfileService::pushMessage(LSMessage &message)
 
 	if (!checkFileIsValid(sourceFile)) {
 		std::string errorMessage = "Supplied file ";
-		errorMessage += sourceFile;
+		errorMessage += requestedSourceFile;
 		errorMessage += " does not exist or is invalid";
 		LSUtils::respondWithError(request, errorMessage, BT_ERR_SRCFILE_INVALID);
 		return true;

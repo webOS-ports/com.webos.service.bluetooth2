@@ -287,10 +287,9 @@ bool BluetoothOppProfileService::prepareFileTransfer(LS::Message &request, pbnjs
 
 std::string BluetoothOppProfileService::buildStorageDirPath(const std::string &path)
 {
-	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
-	result += "/";
-	result += path;
-	return result;
+	// Empty, which the callers reject as an invalid path, when the client's path would leave the storage
+	// directory; "../../etc/shadow" used to be sent to the remote device.
+	return resolvePathUnderDirectory(WEBOS_MOUNTABLESTORAGEDIR, path);
 }
 
 void BluetoothOppProfileService::notifyClientTransferStarts(LS::Message &request, const std::string &adapterAddress)
