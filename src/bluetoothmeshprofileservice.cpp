@@ -725,6 +725,7 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 		LSUtils::respondWithError(request, BT_ERR_MESSAGE_OWNER_MISSING);
 		return true;
 	}
+	BluetoothClientWatch *watch = mNetworkIdWatch.back();
 	std::string bearer = "PB-ADV"; // default value
 
 	if (requestObj.hasKey("bearer"))
@@ -733,6 +734,8 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 	BluetoothError error = impl->createNetwork(bearer);
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
+		// The watch added above stayed, and got the network id of a later createNetwork.
+		removeClientWatch(&mNetworkIdWatch, watch);
 		LSUtils::respondWithError(request, error);
 		return true;
 	}
@@ -1039,17 +1042,6 @@ bool BluetoothMeshProfileService::setOnOff(LSMessage &message)
 		isSubscribe = requestObj["subscribe"].asBool();
 	}
 
-	if (isSubscribe)
-	{
-		bool retVal = addClientWatch(request, &mModelOnOffResultWatch,
-			adapterAddress, "");
-		if (!retVal)
-		{
-			LSUtils::respondWithError(request, BT_ERR_MESSAGE_OWNER_MISSING);
-			return true;
-		}
-	}
-
 	std::string bearer = "PB-ADV"; // default value
 
 	if (requestObj.hasKey("bearer"))
@@ -1073,12 +1065,29 @@ bool BluetoothMeshProfileService::setOnOff(LSMessage &message)
 		return true;
 	}
 
+	// Watched only once the request has passed its checks: a rejected one used to leave its watch behind,
+	// receiving the on/off results of other clients' requests.
+	BluetoothClientWatch *watch = nullptr;
+	if (isSubscribe)
+	{
+		bool retVal = addClientWatch(request, &mModelOnOffResultWatch,
+			adapterAddress, "");
+		if (!retVal)
+		{
+			LSUtils::respondWithError(request, BT_ERR_MESSAGE_OWNER_MISSING);
+			return true;
+		}
+		watch = mModelOnOffResultWatch.back();
+	}
+
 	BluetoothError error = impl->setOnOff(bearer,
 			(uint16_t)requestObj["destAddress"].asNumber<int32_t>(),
 			(uint16_t)requestObj["appKeyIndex"].asNumber<int32_t>(),
 			value, isSubscribe);
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
+		if (watch)
+			removeClientWatch(&mModelOnOffResultWatch, watch);
 		LSUtils::respondWithError(request, error);
 		return true;
 	}
