@@ -50,6 +50,14 @@ target_link_libraries(webos-bluetooth-service-tests
 
 add_test(NAME webos-bluetooth-service-unit COMMAND webos-bluetooth-service-tests)
 
+# A SIL with no Bluetooth behind it, for driving the service through scenarios (tests/scenarios). Loaded with
+# WEBOS_BLUETOOTH_SIL=fake WEBOS_BLUETOOTH_SIL_BASE_PATH=<its directory>.
+add_library(fake MODULE fakesil/fakesil.cpp)
+set_target_properties(fake PROPERTIES PREFIX "")
+target_link_libraries(fake ${GLIB2_LDFLAGS})
+# Sanitizer runtimes, when built with them, come from the service that loads it.
+target_link_options(fake PRIVATE -Wl,-z,undefs)
+
 # libFuzzer target for what an ANCS provider sends (clang only, -DBUILD_FUZZING=ON). It links the parser alone.
 option(BUILD_FUZZING "Build the libFuzzer targets (clang)" OFF)
 if(BUILD_FUZZING)
