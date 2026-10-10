@@ -381,7 +381,7 @@ void BluetoothHfpProfileService::handleOpenScoClientDisappeared(const std::strin
 	if (!getImpl<BluetoothHfpProfile>())
 		return;
 
-	auto closeScoCallback = [this, address, adapterAddress](BluetoothError error) {
+	auto closeScoCallback = [this, address, adapterAddress](BluetoothError /*error*/) {
 		removeOpenScoWatchForDevice(address, true, false);
 	};
 

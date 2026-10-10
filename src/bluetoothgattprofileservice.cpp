@@ -204,7 +204,7 @@ pbnjson::JValue BluetoothGattProfileService::buildGetStatusResp(bool connected,
 }
 
 void BluetoothGattProfileService::removeConnectWatchForDevice(const std::string &adapterAddress,
-		const std::string &key,	bool disconnected, bool remoteDisconnect)
+		const std::string &key,	bool /*disconnected*/, bool remoteDisconnect)
 {
 	auto watchesIter = mConnectSubsMap.find(adapterAddress);
 	if (watchesIter == mConnectSubsMap.end())
@@ -823,7 +823,7 @@ bool BluetoothGattProfileService::removeService(LSMessage &message)
 	}
 
 	std::string serviceUuid = requestObj["service"].asString();
-	auto removeServiceCallback = [this, requestMessage, serviceUuid, adapterAddress](BluetoothError error) {
+	auto removeServiceCallback = [requestMessage, serviceUuid, adapterAddress](BluetoothError error) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -1737,7 +1737,7 @@ bool BluetoothGattProfileService::writeCharacteristicValue(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto writeCharacteristicCallback  = [this, requestMessage, characteristicUuid, serviceUuid, adapterAddress, deviceAddress](BluetoothError error) {
+	auto writeCharacteristicCallback  = [requestMessage, characteristicUuid, serviceUuid, adapterAddress, deviceAddress](BluetoothError error) {
 		BT_INFO("BLE", 0, "write characteristic complete for characteristic %s of service %s", characteristicUuid.c_str(), serviceUuid.c_str());
 
 		if (error != BLUETOOTH_ERROR_NONE)
@@ -2089,7 +2089,7 @@ void BluetoothGattProfileService::handleMonitorCharacteristicClientDropped(Monit
 				BT_DEBUG("Disabling characteristic watch to device %s", (*foundWatch)->deviceAddress.c_str());
 
 				getImpl<BluetoothGattProfile>(subscriptionInfo.adapterAddress)->changeCharacteristicWatchStatus
-            ((*foundWatch)->deviceAddress, (*foundWatch)->serviceId, (*foundWatch)->characteristicId, false, [this](BluetoothError error) {
+            ((*foundWatch)->deviceAddress, (*foundWatch)->serviceId, (*foundWatch)->characteristicId, false, [](BluetoothError /*error*/) {
 					BT_WARNING(MSGID_SUBSCRIPTION_CLIENT_DROPPED, 0, "No LS2 error response can be issued since subscription client has dropped");
 				});
 				mCharacteristicWatchList.erase(foundWatch);
@@ -2135,7 +2135,7 @@ void BluetoothGattProfileService::handleMonitorCharacteristicsClientDropped(Moni
 				BT_DEBUG("Disabling characteristic watch to device %s", (*foundWatch)->deviceAddress.c_str());
 
 				getImpl<BluetoothGattProfile>(subscriptionInfo.adapterAddress)->changeCharacteristicWatchStatus
-            ((*foundWatch)->deviceAddress, (*foundWatch)->serviceId, (*foundWatch)->characteristicId, false, [this](BluetoothError error) {
+            ((*foundWatch)->deviceAddress, (*foundWatch)->serviceId, (*foundWatch)->characteristicId, false, [](BluetoothError /*error*/) {
 					BT_WARNING(MSGID_SUBSCRIPTION_CLIENT_DROPPED, 0, "No LS2 error response can be issued since subscription client has dropped");
 				});
 				mCharacteristicWatchList.erase(foundWatch);
@@ -2320,7 +2320,7 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 		BT_DEBUG("Registering a watch with SIL API for device %s, service %s, characteristic %s",
 		          characteristicWatch->deviceAddress.c_str(), characteristicWatch->serviceId.toString().c_str(), characteristicWatch->characteristicId.toString().c_str());
 
-		auto monitorCallback = [this, requestMessage, characteristicWatch] (BluetoothError error)
+		auto monitorCallback = [requestMessage, characteristicWatch] (BluetoothError error)
 		{
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -2514,7 +2514,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		BT_DEBUG("Registering a watch with SIL API for device %s, service %s, characteristic %s",
 		          characteristicWatch->deviceAddress.c_str(), characteristicWatch->serviceId.toString().c_str(), characteristicWatch->characteristicId.toString().c_str());
 
-		auto monitorCallback = [this, requestMessage, characteristicWatch] (BluetoothError error)
+		auto monitorCallback = [requestMessage, characteristicWatch] (BluetoothError error)
 		{
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -3407,7 +3407,7 @@ bool BluetoothGattProfileService::removeLocalService(uint16_t serverId, const Bl
 	if (service == nullptr)
 		return false;
 
-	auto callback = [server, uuid](BluetoothError error) {
+	auto callback = [server, uuid](BluetoothError /*error*/) {
 		server->removeLocalService(uuid);
 	};
 	BT_DEBUG("[%s](%d) getImpl->removeService\n", __FUNCTION__, __LINE__);
@@ -3433,7 +3433,7 @@ bool BluetoothGattProfileService::removeLocalService(const BluetoothUuid &uuid, 
 		if (service == nullptr)
 			continue;
 
-		auto callback = [server, uuid](BluetoothError error) {
+		auto callback = [server, uuid](BluetoothError /*error*/) {
 			server->removeLocalService(uuid);
 		};
 		BT_DEBUG("[%s](%d) getImpl->removeService\n", __FUNCTION__, __LINE__);
@@ -4063,7 +4063,7 @@ void BluetoothGattProfileService::handleConnectClientDisappeared(const uint16_t 
 	if (!getImpl<BluetoothProfile>(adapterAddress))
 		return;
 
-	auto disconnectCallback = [this, clientId, address, adapterAddress](BluetoothError error) {
+	auto disconnectCallback = [this, clientId, address, adapterAddress](BluetoothError /*error*/) {
 
 		BT_INFO("BLE", 0, "[%s](%d) disconnect from device %s complete\n", __FUNCTION__, __LINE__, address.c_str());
 		markDeviceAsNotConnected(adapterAddress,address);

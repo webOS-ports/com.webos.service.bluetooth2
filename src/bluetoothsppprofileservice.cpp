@@ -124,7 +124,7 @@ void BluetoothSppProfileService::handleConnectClientDisappeared(const std::strin
 	if (!mImpl)
 		return;
 
-	auto disconnectCallback = [this, channelId, adapterAddress, address, channelManager](BluetoothError error) {
+	auto disconnectCallback = [this, adapterAddress, address, channelManager](BluetoothError /*error*/) {
 		if (!channelManager->isChannelConnected(address))
 			markDeviceAsNotConnected(adapterAddress, address);
 	};
@@ -299,7 +299,7 @@ void BluetoothSppProfileService::disconnectToStack(LS::Message &request, pbnjson
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto disconnectCallback = [this, requestMessage, adapterAddress, channelId, stackChannelId](BluetoothError error) {
+	auto disconnectCallback = [this, requestMessage, adapterAddress, channelId](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (error != BLUETOOTH_ERROR_NONE)
@@ -578,7 +578,7 @@ bool BluetoothSppProfileService::writeData(LSMessage &message)
 
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
-	auto writeDataCallback = [this, requestMessage, adapterAddress](BluetoothError error) {
+	auto writeDataCallback = [requestMessage, adapterAddress](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (error != BLUETOOTH_ERROR_NONE)

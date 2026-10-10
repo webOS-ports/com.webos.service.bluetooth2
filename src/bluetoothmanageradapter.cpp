@@ -614,7 +614,7 @@ void BluetoothManagerAdapter::deviceLinkKeyCreated(const std::string &address, B
 	mLinkKeys.insert(std::pair<std::string, BluetoothLinkKey>(address, LinkKey));
 }
 
-void BluetoothManagerAdapter::deviceLinkKeyDestroyed(const std::string &address, BluetoothLinkKey LinkKey)
+void BluetoothManagerAdapter::deviceLinkKeyDestroyed(const std::string &address, BluetoothLinkKey /*LinkKey*/)
 {
 	BT_DEBUG("Link Key of device(%s) is created", address.c_str());
 
@@ -757,7 +757,7 @@ bool BluetoothManagerAdapter::setState(LS::Message &request, pbnjson::JValue &re
 	return true;
 }
 
-void BluetoothManagerAdapter::handleStatePropertiesSet(BluetoothPropertiesList properties, LS::Message &request, BluetoothError error)
+void BluetoothManagerAdapter::handleStatePropertiesSet(BluetoothPropertiesList /*properties*/, LS::Message &request, BluetoothError error)
 {
 	BT_INFO("MANAGER_SERVICE", 0, "Return of handleStatePropertiesSet is %d", error);
 
@@ -1183,7 +1183,7 @@ void BluetoothManagerAdapter::appendConnectedProfiles(pbnjson::JValue &object, c
 	object.put("connectedProfiles", connectedProfilesObj);
 }
 
-bool BluetoothManagerAdapter::startDiscovery(LS::Message &request, pbnjson::JValue &requestObj)
+bool BluetoothManagerAdapter::startDiscovery(LS::Message &request, pbnjson::JValue &/*requestObj*/)
 {
 	if (!mPowered)
 	{
@@ -1355,7 +1355,7 @@ bool BluetoothManagerAdapter::getFilteringDeviceStatus(LS::Message &request, pbn
 	return true;
 }
 
-bool BluetoothManagerAdapter::getConnectedDevices(LS::Message &request, pbnjson::JValue &requestObj)
+bool BluetoothManagerAdapter::getConnectedDevices(LS::Message &request, pbnjson::JValue &/*requestObj*/)
 {
 	bool subscribed = false;
 
@@ -1378,7 +1378,7 @@ bool BluetoothManagerAdapter::getConnectedDevices(LS::Message &request, pbnjson:
 	return true;
 }
 
-bool BluetoothManagerAdapter::getPairedDevicesStatus(LS::Message &request, pbnjson::JValue &requestObj)
+bool BluetoothManagerAdapter::getPairedDevicesStatus(LS::Message &request, pbnjson::JValue &/*requestObj*/)
 {
 	bool subscribed = false;
 
@@ -1401,7 +1401,7 @@ bool BluetoothManagerAdapter::getPairedDevicesStatus(LS::Message &request, pbnjs
 	return true;
 }
 
-bool BluetoothManagerAdapter::getDiscoveredDeviceStatus(LS::Message &request, pbnjson::JValue &requestObj)
+bool BluetoothManagerAdapter::getDiscoveredDeviceStatus(LS::Message &request, pbnjson::JValue &/*requestObj*/)
 {
 	bool subscribed = false;
 
@@ -1422,7 +1422,7 @@ bool BluetoothManagerAdapter::getDiscoveredDeviceStatus(LS::Message &request, pb
 	return true;
 }
 
-bool BluetoothManagerAdapter::getDeviceStatus(LS::Message &request, pbnjson::JValue &requestObj)
+bool BluetoothManagerAdapter::getDeviceStatus(LS::Message &request, pbnjson::JValue &/*requestObj*/)
 {
 	bool subscribed = false;
 
@@ -1640,7 +1640,7 @@ bool BluetoothManagerAdapter::cancelPairing(LS::Message &request, pbnjson::JValu
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto cancelPairingCallback = [this, requestMessage, device](BluetoothError error) {
+	auto cancelPairingCallback = [this, requestMessage](BluetoothError error) {
 		pbnjson::JValue responseObj = pbnjson::Object();
 		responseObj.put("adapterAddress", mAddress);
 		responseObj.put("returnValue", true);
@@ -1728,7 +1728,7 @@ bool BluetoothManagerAdapter::unpair(LS::Message &request, pbnjson::JValue &requ
 	return true;
 }
 
-bool BluetoothManagerAdapter::awaitPairingRequests(LS::Message &request, pbnjson::JValue &requestObj)
+bool BluetoothManagerAdapter::awaitPairingRequests(LS::Message &request, pbnjson::JValue &/*requestObj*/)
 {
 	if(mIncomingPairingWatch)
 	{
@@ -2025,7 +2025,7 @@ void BluetoothManagerAdapter::abortPairing(bool incoming)
 		// No need to call handleCancelResponse as callback, since we lost the subscriber and
 		// we need not respond to the subscriber anymore.
 
-		auto abortPairingCb = [this](BluetoothError error) {
+		auto abortPairingCb = [](BluetoothError error) {
 			if (BLUETOOTH_ERROR_NONE == error)
 			{
 				BT_DEBUG("Pairing has been aborted");

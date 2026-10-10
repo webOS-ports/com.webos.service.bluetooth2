@@ -216,7 +216,7 @@ void BluetoothBinarySocket::sendBufferData()
 	}
 }
 
-gboolean BluetoothBinarySocket::getAcceptRequest(GIOChannel *io, GIOCondition cond, gpointer userData)
+gboolean BluetoothBinarySocket::getAcceptRequest(GIOChannel */*io*/, GIOCondition cond, gpointer userData)
 {
 	if (NULL == userData)
 		return FALSE;
@@ -249,7 +249,7 @@ gboolean BluetoothBinarySocket::getAcceptRequest(GIOChannel *io, GIOCondition co
 	return TRUE;
 }
 
-gboolean BluetoothBinarySocket::getReceiveRequest(GIOChannel *io, GIOCondition cond, gpointer userData)
+gboolean BluetoothBinarySocket::getReceiveRequest(GIOChannel */*io*/, GIOCondition cond, gpointer userData)
 {
 	if (NULL == userData)
 		return FALSE;

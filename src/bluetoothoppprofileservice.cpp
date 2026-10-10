@@ -81,7 +81,7 @@ void BluetoothOppProfileService::initialize(const std::string &adapterAddress)
 		getImpl<BluetoothOppProfile>(adapterAddress)->registerObserver(this);
 }
 
-bool BluetoothOppProfileService::isDevicePaired(const std::string &address)
+bool BluetoothOppProfileService::isDevicePaired(const std::string &/*address*/)
 {
 	// NOTE: OPP connect method does not need to check the paired status of a device.
 	// So, we make the overriden isDevicePaired func, return value only true.
@@ -104,7 +104,7 @@ void BluetoothOppProfileService::cancelTransfer(BluetoothOppTransferId id, bool 
 	transfer->canceled = true;
 	transfer->clientDisappeared = clientDisappeared;
 
-	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError error) {
+	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError /*error*/) {
 		BT_DEBUG("Successfully canceled bluetooth OPP transfer %" PRIu64, id);
 
 		// Either that this time the client is invalid because he disappeared

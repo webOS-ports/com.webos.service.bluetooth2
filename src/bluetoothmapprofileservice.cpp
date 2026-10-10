@@ -345,7 +345,7 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
-	auto connectCallback = [ = ](BluetoothError error, const std::string& sessionId) {
+	auto connectCallback = [=, this](BluetoothError error, const std::string& sessionId) {
 		LS::Message request(requestMessage);
 
 		pbnjson::JValue responseObj;
@@ -405,7 +405,7 @@ void BluetoothMapProfileService::handleConnectClientDisappeared(const std::strin
 	if (watchIter == (watchesIter->second).end())
 		return;
 
-	auto disconnectCallback = [ = ](BluetoothError error, const std::string &instanceName) {
+	auto disconnectCallback = [=, this](BluetoothError /*error*/, const std::string &/*instanceName*/) {
 		handleMessageNotificationClientDisappeared(adapterAddress,sessionKey);
 		removeDeviceAsConnectedWithSessionKey(adapterAddress, sessionKey);
 		markDeviceAsNotConnected(adapterAddress, sessionKey);
@@ -546,7 +546,7 @@ bool BluetoothMapProfileService::disconnect(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto disconnectCallback = [ = ](BluetoothError error, const std::string &instanceName) {
+	auto disconnectCallback = [=, this](BluetoothError error, const std::string &instanceName) {
 
 		LS::Message request(requestMessage);
 
@@ -802,7 +802,7 @@ bool BluetoothMapProfileService::getMessageFilters(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto getMessageFiltersCallback = [ = ](BluetoothError error,std::list<std::string> filters) {
+	auto getMessageFiltersCallback = [=, this](BluetoothError error,std::list<std::string> filters) {
 		LS::Message request(requestMessage);
 
 		if (BLUETOOTH_ERROR_NONE != error)

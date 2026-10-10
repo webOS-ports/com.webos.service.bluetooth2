@@ -454,7 +454,7 @@ public:
 
 	static uint16_t nextClientId();
 	virtual void initialize();
-	virtual void initialize(BluetoothProfile *impl) {};
+	virtual void initialize(BluetoothProfile */*impl*/) {};
 	void initialize(const std::string &adapterAddress);
 	bool connect(LSMessage &message);
 	bool disconnect(LSMessage &message);

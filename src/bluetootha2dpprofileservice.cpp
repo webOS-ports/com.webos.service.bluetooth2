@@ -137,7 +137,7 @@ void BluetoothA2dpProfileService::audioSocketCreated(const std::string &address,
 	mAudioSocketInfo->isIn = isIn;
 }
 
-void BluetoothA2dpProfileService::audioSocketDestroyed(const std::string &address, const std::string &path, BluetoothA2dpAudioSocketType type, bool isIn)
+void BluetoothA2dpProfileService::audioSocketDestroyed(const std::string &/*address*/, const std::string &path, BluetoothA2dpAudioSocketType /*type*/, bool /*isIn*/)
 {
 	BT_INFO("A2DP", 0, "audioSocketDestroyed : path %s", path.c_str());
 
@@ -936,7 +936,7 @@ bool BluetoothA2dpProfileService::disableDelayReporting(LSMessage &message)
 	return true;
 }
 
-void BluetoothA2dpProfileService::handleGetCodecConfigurationClientDisappeared(const std::string &adapterAddress, const std::string &address)
+void BluetoothA2dpProfileService::handleGetCodecConfigurationClientDisappeared(const std::string &/*adapterAddress*/, const std::string &address)
 {
 	auto watchIter = mGetCodecConfigurationWatches.find(address);
 	if (watchIter == mGetCodecConfigurationWatches.end())

@@ -595,7 +595,7 @@ void BluetoothProfileService::handleConnectClientDisappeared(const std::string &
 	if (!impl)
 		return;
 
-	auto disconnectCallback = [this, address, adapterAddress](BluetoothError error) {
+	auto disconnectCallback = [this, address, adapterAddress](BluetoothError /*error*/) {
 		markDeviceAsNotConnected(adapterAddress, address);
 		markDeviceAsNotConnecting(adapterAddress, address);
 	};

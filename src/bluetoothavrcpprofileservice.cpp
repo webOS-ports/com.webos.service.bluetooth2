@@ -960,7 +960,7 @@ void BluetoothAvrcpProfileService::playerApplicationSettingsReceived(const Bluet
 	}
 }
 
-void BluetoothAvrcpProfileService::handlePlayserApplicationSettingsPropertiesSet(BluetoothPlayerApplicationSettingsPropertiesList properties, LS::Message &request, std::string &adapterAddress, std::string &address, BluetoothError error)
+void BluetoothAvrcpProfileService::handlePlayserApplicationSettingsPropertiesSet(BluetoothPlayerApplicationSettingsPropertiesList /*properties*/, LS::Message &request, std::string &adapterAddress, std::string &address, BluetoothError error)
 {
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
@@ -2112,7 +2112,7 @@ void BluetoothAvrcpProfileService::passThroughCommandReceived(BluetoothAvrcpPass
 /*
  * This will be deprecated on implementation of remoteFeaturesReceived with role.
  */
-void BluetoothAvrcpProfileService::remoteFeaturesReceived(BluetoothAvrcpRemoteFeatures features, const std::string &address)
+void BluetoothAvrcpProfileService::remoteFeaturesReceived(BluetoothAvrcpRemoteFeatures /*features*/, const std::string &/*address*/)
 {
 
 }

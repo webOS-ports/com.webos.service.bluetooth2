@@ -30,7 +30,7 @@
 	constexpr static const LSMethod LS_CATEGORY_TABLE_NAME(name)[] = {
 
 #define LS_CREATE_CATEGORY_BEGIN(cl, name) \
-	typedef cl cl_t; \
+	using cl_t [[maybe_unused]] = cl; \
 	constexpr static const LSMethod LS_CATEGORY_TABLE_NAME(name)[] = {
 
 #define LS_CATEGORY_MAPPED_METHOD(name, func) { #name, \
@@ -42,7 +42,7 @@
 	static_cast<LSMethodFlags>(0) },
 
 #define LS_CREATE_CATEGORY_END \
-{ nullptr, nullptr } \
+{ nullptr, nullptr, static_cast<LSMethodFlags>(0) } \
 	};
 
 // Build a schema as a const char * string without any execution overhead

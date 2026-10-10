@@ -71,7 +71,7 @@ void BluetoothFtpProfileService::cancelTransfer(BluetoothFtpTransferId id, bool 
 	transfer->canceled = true;
 	transfer->clientDisappeared = clientDisappeared;
 
-	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError error) {
+	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError /*error*/) {
 		BT_DEBUG("Successfully canceled bluetooth FTP transfer %" PRIu64, id);
 
 		// Either that this time the client is invalid because he disappeared

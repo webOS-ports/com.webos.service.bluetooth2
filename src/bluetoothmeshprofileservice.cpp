@@ -1345,7 +1345,7 @@ void BluetoothMeshProfileService::provisionResult(BluetoothError error, const st
 								 const std::string &promptType,
 								 uint16_t unicastAddress,
 								 uint8_t count,
-								 const std::string &uuid)
+								 const std::string &/*uuid*/)
 {
 	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mProvResultWatch.size());
 	for (auto watch : mProvResultWatch)

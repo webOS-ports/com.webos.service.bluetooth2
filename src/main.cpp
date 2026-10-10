@@ -32,8 +32,8 @@ static gboolean option_version = FALSE;
 
 static GOptionEntry options[] = {
 	{ "version", 'v', 0, G_OPTION_ARG_NONE, &option_version,
-	  "Show version information and exit" },
-	{ NULL },
+	  "Show version information and exit", nullptr },
+	{},
 };
 
 static GMainLoop *mainLoop = nullptr;
