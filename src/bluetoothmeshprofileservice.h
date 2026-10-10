@@ -104,12 +104,12 @@ private:
 						std::list<BluetoothClientWatch *> *clientWatch,
 						std::string adapterAddress, std::string deviceAddress);
 	void handleClientDisappeared(std::list<BluetoothClientWatch *> *clientWatch,
-								 const std::string senderName);
+								 BluetoothClientWatch *watch);
 	void handleKeyRefreshClientDisappeared(
 					std::map<uint16_t, BluetoothClientWatch *> &keyRefreshWatch,
 					const uint16_t netKeyIndex);
 	void removeClientWatch(std::list<BluetoothClientWatch *> *clientWatch,
-						   const std::string &senderName);
+						   BluetoothClientWatch *watch);
 	bool updateDeviceList(const std::string &adapterAddress, const int16_t rssi, const std::string &uuid, const std::string &name);
 	pbnjson::JValue appendDevice(const int16_t rssi, const std::string &uuid, const std::string &name);
 	pbnjson::JValue appendDevices(const std::string &adapterAddress);
