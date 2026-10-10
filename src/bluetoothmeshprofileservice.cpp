@@ -1350,7 +1350,6 @@ void BluetoothMeshProfileService::provisionResult(BluetoothError error, const st
 		if (convertToLower(adapterAddress) == convertToLower(watch->getAdapterAddress()))
 		{
 			LSMessage *message = watch->getMessage();
-			std::string payload = LSMessageGetPayload(message);
 			pbnjson::JValue replyObj = pbnjson::Object();
 
 			if (!LSUtils::parsePayload(LSMessageGetPayload(message), replyObj))

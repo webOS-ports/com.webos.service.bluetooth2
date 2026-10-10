@@ -151,9 +151,9 @@ void BluetoothA2dpProfileService::audioSocketDestroyed(const std::string &/*addr
 		DELETE_OBJ(mAptxConfigurationInfo);
 }
 
-void BluetoothA2dpProfileService::sbcConfiguraionChanged(const std::string &address, const BluetoothSbcConfiguration &sbcConfiguration)
+void BluetoothA2dpProfileService::sbcConfigurationChanged(const std::string &address, const BluetoothSbcConfiguration &sbcConfiguration)
 {
-	BT_INFO("A2DP", 0, "sbcConfiguraionChanged : address %s", address.c_str());
+	BT_INFO("A2DP", 0, "sbcConfigurationChanged : address %s", address.c_str());
 
 	auto device = getManager()->findDevice(address);
 	if (!device)

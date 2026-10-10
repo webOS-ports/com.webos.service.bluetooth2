@@ -1021,8 +1021,6 @@ bool BluetoothManagerService::startFilteringDiscovery(LSMessage &message)
 	}
 
 	std::string adapterAddress;
-	std::string typeOfDevice;
-	std::string accessCode;
 	TransportType transportType = TransportType::BT_TRANSPORT_TYPE_NONE;
 	InquiryAccessCode inquiryAccessCode = InquiryAccessCode::BT_ACCESS_CODE_NONE; // CID 166097
 
