@@ -15,6 +15,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bluetoothmeshprofileservice.h"
+
+#include <cinttypes>
+
 #include "bluetoothmanagerservice.h"
 #include "bluetoothmanageradapter.h"
 #include "bluetoothdevice.h"
@@ -472,14 +475,14 @@ pbnjson::JValue BluetoothMeshProfileService::appendCompositionData(BleMeshCompos
 
 	pbnjson::JValue elementsObjectArr = pbnjson::Array();
 	std::vector<BleMeshElement> elements = compositionData.getElements();
-	for (auto i = 0; i < elements.size(); ++i)
+	for (std::size_t i = 0; i < elements.size(); ++i)
 	{
 		pbnjson::JValue elementobject = pbnjson::Object();
 		elementobject.put("loc", elements[i].getLoc());
 		elementobject.put("numS",  elements[i].getNumS());
 		std::vector<uint32_t> sigModelIds = elements[i].getSigModelIds();
 		pbnjson::JValue sigModIdsArray = pbnjson::Array();
-		for (auto j = 0; j < sigModelIds.size(); ++j)
+		for (std::size_t j = 0; j < sigModelIds.size(); ++j)
 		{
 			sigModIdsArray.append((int32_t)(sigModelIds[j]));
 		}
@@ -487,7 +490,7 @@ pbnjson::JValue BluetoothMeshProfileService::appendCompositionData(BleMeshCompos
 		elementobject.put("numV",  elements[i].getNumV());
 		std::vector<uint32_t> vendorModelIds = elements[i].getVendorModelIds();
 		pbnjson::JValue vendorModIdsArray = pbnjson::Array();
-		for (auto k = 0; k < vendorModelIds.size(); ++k)
+		for (std::size_t k = 0; k < vendorModelIds.size(); ++k)
 		{
 			vendorModIdsArray.append((int32_t)(vendorModelIds[k]));
 		}
@@ -520,7 +523,7 @@ pbnjson::JValue BluetoothMeshProfileService::appendAppKeyIndexes(std::vector<uin
 void BluetoothMeshProfileService::scanResult(const std::string &adapterAddress,
 											 const int16_t rssi, const std::string &uuid, const std::string &name)
 {
-	BT_INFO("MESH", 0, "[%s : %d], num_watch: %d", __FUNCTION__, __LINE__, mScanResultWatch.size());
+	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mScanResultWatch.size());
 	for (auto watch : mScanResultWatch)
 	{
 		BT_INFO("MESH", 0, "AdapterAddress: %s --- %s", adapterAddress.c_str(), watch->getAdapterAddress().c_str());
@@ -757,7 +760,7 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 void BluetoothMeshProfileService::updateNetworkId(const std::string &adapterAddress,
 											 const uint64_t networkId)
 {
-	BT_INFO("MESH", 0, "[%s : %d], num_watch: %d", __FUNCTION__, __LINE__, mNetworkIdWatch.size());
+	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mNetworkIdWatch.size());
 	for (auto watch : mNetworkIdWatch)
 	{
 		BT_INFO("MESH", 0, "AdapterAddress: %s --- %s", adapterAddress.c_str(), watch->getAdapterAddress().c_str());
@@ -766,7 +769,7 @@ void BluetoothMeshProfileService::updateNetworkId(const std::string &adapterAddr
 			pbnjson::JValue object = pbnjson::Object();
 			object.put("returnValue", true);
 			object.put("adapterAddress", adapterAddress);
-			BT_INFO("MESH", 0, "networkId : [%s : %llu]", __FUNCTION__, networkId);
+			BT_INFO("MESH", 0, "networkId : [%s : %" PRIu64 "]", __FUNCTION__, networkId);
 			std::string networkID = std::to_string(networkId);
 			object.put("networkId", networkID);
 			if (!LSUtils::callDb8MeshSetToken(getManager(), networkID))
@@ -1344,7 +1347,7 @@ void BluetoothMeshProfileService::provisionResult(BluetoothError error, const st
 								 uint8_t count,
 								 const std::string &uuid)
 {
-	BT_INFO("MESH", 0, "[%s : %d], num_watch: %d", __FUNCTION__, __LINE__, mProvResultWatch.size());
+	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mProvResultWatch.size());
 	for (auto watch : mProvResultWatch)
 	{
 		BT_INFO("MESH", 0, "AdapterAddress: %s --- %s", adapterAddress.c_str(), watch->getAdapterAddress().c_str());
@@ -2411,7 +2414,7 @@ bool BluetoothMeshProfileService::keyRefresh(LSMessage &message)
 		else
 		{
 			responseObj.put("adapterAddress", adapterAddress);
-			for (int i = 0; i < blackListedNodes.size(); ++i)
+			for (std::size_t i = 0; i < blackListedNodes.size(); ++i)
 			{
 				if(!LSUtils::callDb8MeshDeleteNode(getManager(), blackListedNodes[i]))
 				{
