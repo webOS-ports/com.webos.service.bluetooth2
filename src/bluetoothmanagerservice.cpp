@@ -320,7 +320,13 @@ bool BluetoothManagerService::isRequestedAdapterAvailable(LS::Message &request, 
 
 bool BluetoothManagerService::isRoleEnable(const std::string &address, const std::string &role)
 {
-	for (auto profile : findAdapterInfo(address)->getSupportedServiceClasses())
+	BluetoothManagerAdapter *adapter = findAdapterInfo(address);
+	// The adapter, the default one in particular, can be gone (adaptersChanged); these helpers are called
+	// from profile code at any time and dereferenced the lookup unchecked.
+	if (!adapter)
+		return false;
+
+	for (auto profile : adapter->getSupportedServiceClasses())
 	{
 		if(convertToLower(profile.getMnemonic()) == convertToLower(role))
 		{
@@ -404,7 +410,8 @@ int BluetoothManagerService::getAdvSize(AdvertiseData advData, bool flagRequired
 	if (advData.includeName)
 	{
 		//TODO multi adapter support required
-		size += overheadBytesPerField + findAdapterInfo(mAddress)->getName().length();
+		BluetoothManagerAdapter *adapter = findAdapterInfo(mAddress);
+		size += overheadBytesPerField + (adapter ? adapter->getName().length() : 0);
 	}
 
 	return size;
@@ -437,7 +444,10 @@ std::string BluetoothManagerService::getAddress() const
 
 bool BluetoothManagerService::isDeviceAvailable(const std::string &adapterAddress, const std::string &address) const
 {
-	auto devices = findAdapterInfo(adapterAddress)->getDevices();
+	BluetoothManagerAdapter *adapter = findAdapterInfo(adapterAddress);
+	if (!adapter)
+		return false;
+	auto devices = adapter->getDevices();
 	std::string convertedAddress = convertToLower(address);
 	auto deviceIter = devices.find(convertedAddress);
 	if (deviceIter == devices.end())
@@ -451,7 +461,10 @@ bool BluetoothManagerService::isDeviceAvailable(const std::string &adapterAddres
 
 bool BluetoothManagerService::isDeviceAvailable(const std::string &address) const
 {
-	auto devices = findAdapterInfo(mAddress)->getDevices();
+	BluetoothManagerAdapter *adapter = findAdapterInfo(mAddress);
+	if (!adapter)
+		return false;
+	auto devices = adapter->getDevices();
 	std::string convertedAddress = convertToLower(address);
 	auto deviceIter = devices.find(convertedAddress);
 	if (deviceIter == devices.end())
@@ -588,6 +601,10 @@ void BluetoothManagerService::adaptersChanged()
 		if (!found)
 		{
 			BT_INFO("MANAGER_SERVICE", 0, "adaptersChanged erasing adapter [%s] from list", it->first.c_str());
+			// The profiles kept pointers to this adapter's SIL profiles, and advertisers registered on it kept
+			// their watches; client watches calling into them later used freed objects.
+			resetProfiles(it->first);
+			removeAdvertisersOfAdapter(it->first);
 			delete it->second;
 			it = mAdaptersInfo.erase(it);
 			notifySubscribersAboutStateChange();
@@ -689,12 +706,14 @@ BluetoothManagerAdapter* BluetoothManagerService::findAdapterInfo(const std::str
 //Still used by a2dp profile
 BluetoothDevice* BluetoothManagerService::findDevice(const std::string &address) const
 {
-	return findAdapterInfo(mAddress)->findDevice(address);
+	BluetoothManagerAdapter *adapter = findAdapterInfo(mAddress);
+	return adapter ? adapter->findDevice(address) : nullptr;
 }
 
 BluetoothDevice* BluetoothManagerService::findDevice(const std::string &adapterAddress, const std::string &address) const
 {
-	return findAdapterInfo(adapterAddress)->findDevice(address);
+	BluetoothManagerAdapter *adapter = findAdapterInfo(adapterAddress);
+	return adapter ? adapter->findDevice(address) : nullptr;
 }
 
 void BluetoothManagerService::updateFromAdapterAddressForQueryAvailable(BluetoothAdapter *adapter, const BluetoothProperty &property)
@@ -2289,6 +2308,30 @@ void BluetoothManagerService::postToAdvertiserClient(uint8_t advertiserId, pbnjs
 		LSUtils::postToClient(watch->second->getMessage(), responseObj);
 }
 
+void BluetoothManagerService::removeAdvertisersOfAdapter(const std::string &adapterAddress)
+{
+	for (auto it = mAdvIdAdapterMap.begin(); it != mAdvIdAdapterMap.end(); )
+	{
+		if (convertToLower(it->second) != convertToLower(adapterAddress))
+		{
+			++it;
+			continue;
+		}
+
+		uint8_t advertiserId = it->first;
+		pbnjson::JValue responseObj = pbnjson::Object();
+		responseObj.put("adapterAddress", adapterAddress);
+		responseObj.put("advertiserId", advertiserId);
+		responseObj.put("subscribed", false);
+		responseObj.put("returnValue", false);
+		responseObj.put("errorCode", (int32_t)BT_ERR_ADAPTER_NOT_AVAILABLE);
+		responseObj.put("errorText", retrieveErrorText(BT_ERR_ADAPTER_NOT_AVAILABLE));
+		postToAdvertiserClient(advertiserId, responseObj);
+		removeAdvertiserWatch(advertiserId);
+		it = mAdvIdAdapterMap.erase(it);
+	}
+}
+
 void BluetoothManagerService::removeAdvertiserWatch(uint8_t advertiserId)
 {
 	auto watch = mAdvertisingWatches.find(advertiserId);
@@ -2369,7 +2412,8 @@ void BluetoothManagerService::disableAndUnregisterAdvertiser(const std::string &
 
 bool BluetoothManagerService::getPowered(const std::string &address)
 {
-	return findAdapterInfo(address)->getPowerState();
+	BluetoothManagerAdapter *adapter = findAdapterInfo(address);
+	return adapter && adapter->getPowerState();
 }
 
 

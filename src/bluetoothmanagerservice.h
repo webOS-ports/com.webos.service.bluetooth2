@@ -185,6 +185,7 @@ private:
 	bool notifyAdvertisingDisabled(uint8_t advertiserId);
 	void postToAdvertiserClient(uint8_t advertiserId, pbnjson::JValue &responseObj);
 	void removeAdvertiserWatch(uint8_t advertiserId);
+	void removeAdvertisersOfAdapter(const std::string &adapterAddress);
 	void disableAndUnregisterAdvertiser(const std::string &adapterAddress, uint8_t advertiserId);
 	bool setPairableState(const std::string &adapterAddress, bool value);
 

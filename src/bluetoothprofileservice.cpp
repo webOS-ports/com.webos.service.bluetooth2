@@ -93,6 +93,9 @@ void BluetoothProfileService::reset(const std::string &adapterAddress)
 	if (implIter == mImpls.end())
 		return;
 
+	// The default-adapter shortcut may be this adapter's profile, which is going away with it.
+	if (implIter->second == mImpl)
+		mImpl = 0;
 	mImpls.erase(implIter);
 }
 
@@ -366,7 +369,8 @@ void BluetoothProfileService::propertiesChanged(const std::string &adapterAddres
 			}
 
 			notifyStatusSubscribers(adapterAddress, address, connected);
-			adapterInfo->notifySubscribersConnectedDevicesChanged();
+			if (adapterInfo)	// the adapter may be gone
+				adapterInfo->notifySubscribersConnectedDevicesChanged();
 
 			// When we switch from connected to disconnected we always just try to
 			// remove all subscription. Called method will just return when subscriptions

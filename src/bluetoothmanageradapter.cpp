@@ -67,6 +67,44 @@ mBluetoothManagerService(mngr)
 BluetoothManagerAdapter::~BluetoothManagerAdapter()
 {
 	BT_INFO("MANAGER_SERVICE", 0,"BluetoothManagerAdapter address[%s] destroyed", mAddress.c_str());
+
+	// The adapter went away (adaptersChanged). Its subscriptions end here: their watches call back into this
+	// object, and used to stay registered and run on it after it was freed. Its devices went with it nowhere.
+	auto endSubscription = [this](LSUtils::ClientWatch *watch) {
+		if (!watch)
+			return;
+		pbnjson::JValue responseObj = pbnjson::Object();
+		responseObj.put("adapterAddress", mAddress);
+		responseObj.put("subscribed", false);
+		responseObj.put("returnValue", false);
+		responseObj.put("errorCode", (int32_t)BT_ERR_ADAPTER_NOT_AVAILABLE);
+		responseObj.put("errorText", retrieveErrorText(BT_ERR_ADAPTER_NOT_AVAILABLE));
+		LSUtils::postToClient(watch->getMessage(), responseObj);
+		delete watch;
+	};
+
+	endSubscription(mOutgoingPairingWatch);
+	mOutgoingPairingWatch = nullptr;
+	endSubscription(mIncomingPairingWatch);
+	mIncomingPairingWatch = nullptr;
+	for (auto &watch : mGetDevicesWatches)
+		endSubscription(watch.second);
+	mGetDevicesWatches.clear();
+	for (auto &watch : mStartScanWatches)
+		endSubscription(watch.second);
+	mStartScanWatches.clear();
+
+	mPairState.forgetDevice(mPairState.getDevice());
+	for (auto &device : mDevices)
+		delete device.second;
+	mDevices.clear();
+	for (auto &device : mLeDevices)
+		delete device.second;
+	mLeDevices.clear();
+	for (auto &scan : mLeDevicesByScanId)
+		for (auto &device : scan.second)
+			delete device.second;
+	mLeDevicesByScanId.clear();
 }
 
 void BluetoothManagerAdapter::notifySubscriberLeDevicesChanged()
@@ -583,7 +621,18 @@ void BluetoothManagerAdapter::leDeviceFoundByScanId(uint32_t scanId, BluetoothPr
 		mLeDevicesByScanId.insert(std::pair<uint32_t, std::unordered_map<std::string, BluetoothDevice*>>(scanId, devices));
 	}
 	else
-		(devicesIter->second).insert(std::pair<std::string, BluetoothDevice*>(device->getAddress(), device));
+	{
+		// A device found again for the same scan is updated; the insert failed and leaked the new object.
+		auto known = (devicesIter->second).find(device->getAddress());
+		if (known != (devicesIter->second).end())
+		{
+			known->second->update(properties);
+			delete device;
+			device = known->second;
+		}
+		else
+			(devicesIter->second).insert(std::pair<std::string, BluetoothDevice*>(device->getAddress(), device));
+	}
 
 	notifySubscriberLeDevicesChangedbyScanId(scanId, device);
 }
