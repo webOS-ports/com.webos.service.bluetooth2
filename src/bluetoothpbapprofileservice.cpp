@@ -530,6 +530,7 @@ void BluetoothPbapProfileService::notifyGetvCardFiltersRequest(LS::Message &requ
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -548,6 +549,7 @@ void BluetoothPbapProfileService::notifyGetSizeRequest(LS::Message &request, Blu
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -566,6 +568,7 @@ void BluetoothPbapProfileService::notifySetPhoneBookRequest(LS::Message &request
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -583,6 +586,7 @@ void BluetoothPbapProfileService::notifyConfirmationRequest(LS::Message &request
 	if (!success)
 	{
 		LSUtils::respondWithError(request, BT_ERR_PBAP_STATE_ERR);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -906,6 +910,7 @@ void BluetoothPbapProfileService::notifyVCardListingRequest(LS::Message &request
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -924,6 +929,7 @@ void BluetoothPbapProfileService::notifySearchPhoneBookRequest(LS::Message &requ
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -1057,6 +1063,7 @@ void BluetoothPbapProfileService::notifyGetPhoneBookPropertiesRequest (LS::Messa
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 	responseObj.put("adapterAddress", adapterAddress);
@@ -1366,6 +1373,7 @@ void BluetoothPbapProfileService::notifyPullVcardRequest(LS::Message &request, B
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -1392,6 +1400,7 @@ void BluetoothPbapProfileService::sendGetPhoneBookResponse(LS::Message &request,
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 	pbnjson::JValue responseObj = pbnjson::Object();

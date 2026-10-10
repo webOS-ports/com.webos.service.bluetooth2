@@ -371,7 +371,8 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			responseObj.put("sessionId", sessionId);
 			responseObj.put("instanceName", instanceName);
 			LSUtils::postToClient(request, responseObj);
-
+			// Released on success too; a subscription keeps its own reference in the connect watch.
+			LSMessageUnref(request.get());
 		}
 	};
 	markDeviceAsConnecting(adapterAddress, sessionKey);
@@ -818,6 +819,7 @@ bool BluetoothMapProfileService::getMessageFilters(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -1257,6 +1259,7 @@ bool BluetoothMapProfileService::getMessage(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -1353,6 +1356,7 @@ bool BluetoothMapProfileService::setMessageStatus(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -1467,6 +1471,7 @@ bool BluetoothMapProfileService::pushMessage(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
