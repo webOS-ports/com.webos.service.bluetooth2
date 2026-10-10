@@ -18,6 +18,7 @@
 #ifndef LS2_UTILS_H_
 #define LS2_UTILS_H_
 
+#include <memory>
 #include <string>
 #include <pbnjson.hpp>
 #include <luna-service2/lunaservice.hpp>
@@ -90,6 +91,15 @@
 
 namespace LSUtils
 {
+
+// Takes a reference to \p message that is released when the last copy of the returned pointer goes. A callback
+// that captures it releases the message however it ends, or when the SIL drops it without calling it; code
+// that referenced the message by hand had to unreference it on every path, and most paths did not.
+inline std::shared_ptr<LSMessage> referenceMessage(LSMessage *message)
+{
+	LSMessageRef(message);
+	return std::shared_ptr<LSMessage>(message, LSMessageUnref);
+}
 
 inline bool generatePayload(const pbnjson::JValue &object, std::string &payload)
 {

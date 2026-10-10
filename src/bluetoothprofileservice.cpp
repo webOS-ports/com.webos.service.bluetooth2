@@ -1059,9 +1059,11 @@ bool BluetoothProfileService::getStatus(LSMessage &message)
 	auto getPropCallback = [this, requestMessage, deviceAddress, adapterAddress, subscribed](BluetoothError error, const BluetoothProperty &property) {
 		LS::Message request(requestMessage);
 
+		// The reference taken above was never released: every getStatus call leaked its message.
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
 			LSUtils::respondWithError(request, BT_ERR_PROFILE_STATE_ERR);
+			LSMessageUnref(requestMessage);
 			return;
 		}
 
@@ -1069,6 +1071,7 @@ bool BluetoothProfileService::getStatus(LSMessage &message)
 			true, adapterAddress, deviceAddress);
 
 		LSUtils::postToClient(request, responseObj);
+		LSMessageUnref(requestMessage);
 	};
 
 	impl->getProperty(deviceAddress, BluetoothProperty::Type::CONNECTED, getPropCallback);

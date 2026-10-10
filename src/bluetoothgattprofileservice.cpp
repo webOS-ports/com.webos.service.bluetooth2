@@ -491,9 +491,9 @@ bool BluetoothGattProfileService::discoverServices(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto discoverServicesCallback  = [this, requestMessage, remoteServiceDiscovery, adapterAddress, address](BluetoothError error) {
+	auto discoverServicesCallback  = [this, requestMessage, remoteServiceDiscovery, adapterAddress, address, requestReference](BluetoothError error) {
 		BT_INFO("BLE", 0, "Service discovery process finished for device %s", address.c_str());
 
 		if (mDiscoveringServices[address])
@@ -730,9 +730,9 @@ bool BluetoothGattProfileService::addService(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto addServiceCallback = [this, requestMessage, serviceUuid, adapterAddress](BluetoothError error) {
+	auto addServiceCallback = [this, requestMessage, serviceUuid, adapterAddress, requestReference](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
 			BT_ERROR("ADD_SERVICE_FAILED", 0, "Add service %s fail code %d", serviceUuid.c_str(), error);
@@ -810,7 +810,7 @@ bool BluetoothGattProfileService::removeService(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string adapterAddress;
 	if (!getManager()->isRequestedAdapterAvailable(request, requestObj, adapterAddress))
@@ -823,7 +823,7 @@ bool BluetoothGattProfileService::removeService(LSMessage &message)
 	}
 
 	std::string serviceUuid = requestObj["service"].asString();
-	auto removeServiceCallback = [requestMessage, serviceUuid, adapterAddress](BluetoothError error) {
+	auto removeServiceCallback = [requestMessage, serviceUuid, adapterAddress, requestReference](BluetoothError error) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -1000,9 +1000,6 @@ bool BluetoothGattProfileService::getStatus(LSMessage &message)
 		subscribed = true;
 	}
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
 	bool isConnected = false;
 	auto iter = mConnectedDevicesMap.find(adapterAddress);
 	if ((iter != mConnectedDevicesMap.end()) && (iter->second.find(address) != iter->second.end()))
@@ -1048,7 +1045,7 @@ bool BluetoothGattProfileService::openServer(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string server = std::to_string(nextClientId());
 	if(findLocalServer(BluetoothUuid(server)) != nullptr)
@@ -1103,7 +1100,7 @@ bool BluetoothGattProfileService::closeServer(LSMessage &message)
 
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string adapterAddress;
 	if (!getManager()->isRequestedAdapterAvailable(request, requestObj, adapterAddress))
@@ -1735,9 +1732,9 @@ bool BluetoothGattProfileService::writeCharacteristicValue(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto writeCharacteristicCallback  = [requestMessage, characteristicUuid, serviceUuid, adapterAddress, deviceAddress](BluetoothError error) {
+	auto writeCharacteristicCallback  = [requestMessage, characteristicUuid, serviceUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error) {
 		BT_INFO("BLE", 0, "write characteristic complete for characteristic %s of service %s", characteristicUuid.c_str(), serviceUuid.c_str());
 
 		if (error != BLUETOOTH_ERROR_NONE)
@@ -1886,7 +1883,7 @@ bool BluetoothGattProfileService::readCharacteristicValue(LSMessage &message)
 
 	BluetoothUuidList characteristicUuids;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	std::string serviceUuid;
 	std::string characteristicUuid;
 	BluetoothGattCharacteristic characteristicToRead;
@@ -1910,7 +1907,7 @@ bool BluetoothGattProfileService::readCharacteristicValue(LSMessage &message)
 		}
 	}
 
-	auto readCharacteristicCallback  = [this, requestMessage, adapterAddress, address](BluetoothError error, BluetoothGattCharacteristic characteristic) {
+	auto readCharacteristicCallback  = [this, requestMessage, adapterAddress, address, requestReference](BluetoothError error, BluetoothGattCharacteristic characteristic) {
 		BT_INFO("BLE", 0, "Read characteristic complete");
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -2001,7 +1998,7 @@ bool BluetoothGattProfileService::readCharacteristicValues(LSMessage &message)
 
 	BluetoothUuidList characteristicUuids;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string serviceUuid = requestObj["service"].asString();
 	auto characteristicUuidsArray = requestObj["characteristics"];
@@ -2018,7 +2015,7 @@ bool BluetoothGattProfileService::readCharacteristicValues(LSMessage &message)
 		characteristicUuids.push_back(BluetoothUuid(characteristicUuidsArray[i].asString()));
 	}
 
-	auto readCharacteristicCallback  = [this, requestMessage, serviceUuid, adapterAddress, deviceAddress](BluetoothError error, BluetoothGattCharacteristicList characteristicsList) {
+	auto readCharacteristicCallback  = [this, requestMessage, serviceUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error, BluetoothGattCharacteristicList characteristicsList) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -2287,7 +2284,7 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	BT_DEBUG("Registering with SIL API for %zu characteristic watch list elements", mCharacteristicWatchList.size());
 	for (auto characteristicWatch : mCharacteristicWatchList)
 	{
@@ -2298,7 +2295,7 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 		BT_DEBUG("Registering a watch with SIL API for device %s, service %s, characteristic %s",
 		          characteristicWatch->deviceAddress.c_str(), characteristicWatch->serviceId.toString().c_str(), characteristicWatch->characteristicId.toString().c_str());
 
-		auto monitorCallback = [requestMessage, characteristicWatch] (BluetoothError error)
+		auto monitorCallback = [requestMessage, characteristicWatch, requestReference] (BluetoothError error)
 		{
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -2481,7 +2478,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	BT_DEBUG("Registering with SIL API for %zu characteristic watch list elements", mCharacteristicWatchList.size());
 	for (auto characteristicWatch : mCharacteristicWatchList)
 	{
@@ -2492,7 +2489,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		BT_DEBUG("Registering a watch with SIL API for device %s, service %s, characteristic %s",
 		          characteristicWatch->deviceAddress.c_str(), characteristicWatch->serviceId.toString().c_str(), characteristicWatch->characteristicId.toString().c_str());
 
-		auto monitorCallback = [requestMessage, characteristicWatch] (BluetoothError error)
+		auto monitorCallback = [requestMessage, characteristicWatch, requestReference] (BluetoothError error)
 		{
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -2742,7 +2739,7 @@ bool BluetoothGattProfileService::readDescriptorValue(LSMessage &message)
 
 	std::string address;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	if (!deviceAddress.empty())
 		address = deviceAddress;
 
@@ -2773,7 +2770,7 @@ bool BluetoothGattProfileService::readDescriptorValue(LSMessage &message)
 		}
 	}
 
-	auto readDescriptorCallback  = [this, requestMessage, adapterAddress, deviceAddress](BluetoothError error, BluetoothGattDescriptor descriptor) {
+	auto readDescriptorCallback  = [this, requestMessage, adapterAddress, deviceAddress, requestReference](BluetoothError error, BluetoothGattDescriptor descriptor) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -2867,7 +2864,7 @@ bool BluetoothGattProfileService::readDescriptorValues(LSMessage &message)
 
 	std::string address;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	if (!deviceAddress.empty())
 		address = deviceAddress;
 
@@ -2888,7 +2885,7 @@ bool BluetoothGattProfileService::readDescriptorValues(LSMessage &message)
 		descriptors.push_back(BluetoothUuid(descriptorsUuidsArray[i].asString()));
 	}
 
-	auto readDescriptorsCallback  = [this, requestMessage, serviceUuid, characteristicUuid, adapterAddress, deviceAddress](BluetoothError error, BluetoothGattDescriptorList descriptorList) {
+	auto readDescriptorsCallback  = [this, requestMessage, serviceUuid, characteristicUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error, BluetoothGattDescriptorList descriptorList) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -3061,9 +3058,9 @@ bool BluetoothGattProfileService::writeDescriptorValue(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto writeDescriptorCallback  = [requestMessage, serviceUuid, characteristicUuid, descriptorUuid, adapterAddress, deviceAddress](BluetoothError error) {
+	auto writeDescriptorCallback  = [requestMessage, serviceUuid, characteristicUuid, descriptorUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
