@@ -59,8 +59,8 @@ bool BluetoothBinarySocket::createBinarySocket(const std::string &name)
 	snprintf(mSocketFileName, BINARY_SOCKET_FILE_NAME_SIZE, "%s/%s%s",
 			BINARY_SOCKET_DIRECTORY, BINARY_SOCKET_FILE_NAME_PREFIX, name.c_str());
 
-	if (access(mSocketFileName, F_OK) == 0)
-		unlink(mSocketFileName);
+	// A socket left by an earlier run; one that is not there is fine. (access() first was a check-then-act.)
+	unlink(mSocketFileName);
 
 	if ((serverSockFd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return false;
