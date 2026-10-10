@@ -147,13 +147,19 @@ def map_connect(phone, subscribe=False):
 
 def map_lists_folders_and_messages(phone):
     session = map_connect(phone)
-    folders = call('map/getFolderList', {'address': phone, 'sessionId': session})
-    check(folders and folders.get('returnValue'), 'getFolderList: %s' % short(folders))
-    messages = call('map/getMessageList', {'address': phone, 'sessionId': session, 'folder': 'inbox',
-                                            'filter': {'maxCount': 3, 'subjectLength': 1}})
-    check(messages and messages.get('returnValue'), 'getMessageList: %s' % short(messages))
-    print('      %d folder(s), %d message(s) listed' % (len(folders.get('folders', [])), len(messages.get('messages', []))))
-    reply = call('map/disconnect', {'address': phone, 'sessionId': session})
+    try:
+        # A session starts at the root; "inbox" is relative to telecom/msg (Android answers Bad Request otherwise).
+        moved = call('map/setFolder', {'address': phone, 'sessionId': session, 'folder': 'telecom/msg'})
+        check(moved and moved.get('returnValue'), 'setFolder telecom/msg: %s' % short(moved))
+        folders = call('map/getFolderList', {'address': phone, 'sessionId': session})
+        check(folders and folders.get('returnValue'), 'getFolderList: %s' % short(folders))
+        messages = call('map/getMessageList', {'address': phone, 'sessionId': session, 'folder': 'inbox',
+                                                'filter': {'maxCount': 3, 'subjectLength': 1}})
+        check(messages and messages.get('returnValue'), 'getMessageList: %s' % short(messages))
+        print('      %d folder(s), %d message(s) listed' % (len(folders.get('folders', [])), len(messages.get('messages', []))))
+    finally:
+        # Also after a failure: a session left open made the next connect fail.
+        reply = call('map/disconnect', {'address': phone, 'sessionId': session})
     check(reply and reply.get('returnValue'), 'map disconnect: %s' % short(reply))
 
 
