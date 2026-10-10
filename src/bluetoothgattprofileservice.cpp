@@ -24,6 +24,7 @@
 #include "logging.h"
 #include "utils.h"
 
+#include <algorithm>
 #include <charconv>
 
 using namespace std::placeholders;
@@ -3190,24 +3191,48 @@ void BluetoothGattProfileService::addLocalService(const BluetoothUuid applicatio
 	newService->desc = service; // TODO: Change to pointer assign
 	newService->addServiceCallback = callback;
 
-	auto addServiceCallback = [this, server, newService, adapterAddress](BluetoothError error, uint16_t serviceId) {
+	// Registered as pending before the SIL call: its callback can run inside it, and deleted the service while
+	// the push_back after the call still added the freed pointer. The steps below hold the server's id, not
+	// the server, as closeServer can delete it meanwhile.
+	uint16_t serverId = server->id;
+	mLocalServices.push_back(newService);
+
+	auto addServiceCallback = [this, serverId, newService, adapterAddress](BluetoothError error, uint16_t serviceId) {
+		if (!isPendingService(newService))
+			return;
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
-			safe_callback(newService->addServiceCallback, error);
-			delete newService;
+			finishPendingService(newService, error);
 			return;
 		}
 
 		BT_INFO("BLE", 0, "add serviceId:%d complete\n", serviceId);
 		newService->id = serviceId;
 		initCharacteristic(newService); // iterator
-		addLocalCharacteristic(server, newService, adapterAddress);
+		addLocalCharacteristic(serverId, newService, adapterAddress);
 	};
-	BT_DEBUG("[%s](%d) getImpl->addService server:%d service:%s\n", __FUNCTION__, __LINE__, server->id, service.getUuid().toString().c_str());
+	BT_DEBUG("[%s](%d) getImpl->addService server:%d service:%s\n", __FUNCTION__, __LINE__, serverId, service.getUuid().toString().c_str());
 	// TODO: Needs server_if, uuid, handles, primary
-	getImpl<BluetoothGattProfile>(adapterAddress)->addService(server->id, service, addServiceCallback);
-	 mLocalServices.push_back(newService);
+	getImpl<BluetoothGattProfile>(adapterAddress)->addService(serverId, service, addServiceCallback);
+}
+
+bool BluetoothGattProfileService::isPendingService(LocalService *service) const
+{
+	return std::find(mLocalServices.begin(), mLocalServices.end(), service) != mLocalServices.end();
+}
+
+// Ends the registration of a service that has not reached its server: it is answered and freed. A failed
+// characteristic or start used to leave the addService call without a reply and the service half registered.
+void BluetoothGattProfileService::finishPendingService(LocalService *service, BluetoothError error)
+{
+	auto pending = std::find(mLocalServices.begin(), mLocalServices.end(), service);
+	if (pending == mLocalServices.end())
+		return;
+
+	mLocalServices.erase(pending);
+	safe_callback(service->addServiceCallback, error);
+	delete service;
 }
 
 void BluetoothGattProfileService::initCharacteristic(LocalService* newService)
@@ -3250,37 +3275,43 @@ bool BluetoothGattProfileService::hasNext(LocalService* newService)
 	return false;
 }
 
-void BluetoothGattProfileService::addLocalCharacteristic(LocalServer* server, LocalService* newService, const std::string &adapterAddress)
+void BluetoothGattProfileService::addLocalCharacteristic(uint16_t serverId, LocalService* newService, const std::string &adapterAddress)
 {
 	BT_DEBUG("[%s](%d) getImpl->addCharacteristic\n", __FUNCTION__, __LINE__);
 	if (newService->descIt == newService->descriptors.end())
 	{
 		auto characteristic = *newService->charIt;
 		getImpl<BluetoothGattProfile>(adapterAddress)->addCharacteristic(
-				server->id,
+				serverId,
 				newService->id,
 				characteristic,
-				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, server, newService, _1, _2, adapterAddress));
+				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, serverId, newService, _1, _2, adapterAddress));
 	}
 	else
 	{
 		auto descriptor = *newService->descIt;
 		getImpl<BluetoothGattProfile>(adapterAddress)->addDescriptor(
-				server->id,
+				serverId,
 				newService->id,
 				descriptor,
-				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, server, newService, _1, _2, adapterAddress));
+				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, serverId, newService, _1, _2, adapterAddress));
 	}
 }
 
-void BluetoothGattProfileService::addCharacteristicCallback(LocalServer* server, LocalService* newService, BluetoothError error, uint16_t charId,
+void BluetoothGattProfileService::addCharacteristicCallback(uint16_t serverId, LocalService* newService, BluetoothError error, uint16_t charId,
 	const std::string &adapterAddress)
 {
 	BT_INFO("BLE", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
+	if (!isPendingService(newService))
+		return;
+
 	auto& service = newService->desc;
 
 	if (error != BLUETOOTH_ERROR_NONE)
+	{
+		finishPendingService(newService, error);
 		return;
+	}
 
 	BluetoothUuid itemUuid;
 	BluetoothGattValue itemValue;
@@ -3322,20 +3353,29 @@ void BluetoothGattProfileService::addCharacteristicCallback(LocalServer* server,
 
 	if (hasNext(newService))
 	{
-		addLocalCharacteristic(server, newService, adapterAddress);
+		addLocalCharacteristic(serverId, newService, adapterAddress);
 		return;
 	}
 
-	auto callback = [server, newService](BluetoothError serviceError) {
-		if (serviceError != BLUETOOTH_ERROR_NONE)
+	auto callback = [this, serverId, newService](BluetoothError serviceError) {
+		if (!isPendingService(newService))
 			return;
 
+		LocalServer *server = findLocalServer(serverId);
+		if (serviceError != BLUETOOTH_ERROR_NONE || !server)
+		{
+			finishPendingService(newService, serviceError != BLUETOOTH_ERROR_NONE ? serviceError : BLUETOOTH_ERROR_FAIL);
+			return;
+		}
+
 		BT_INFO("BLE", 0, "startService complete \n");
+		// The server owns it from here.
+		mLocalServices.erase(std::find(mLocalServices.begin(), mLocalServices.end(), newService));
 		server->addLocalService(newService);
 		safe_callback(newService->addServiceCallback, serviceError);
 	};
 
-	getImpl<BluetoothGattProfile>(adapterAddress)->startService(server->id, newService->id, BluetoothGattTransportMode::GATT_TRANSPORT_MODE_LE_BR_EDR , callback);
+	getImpl<BluetoothGattProfile>(adapterAddress)->startService(serverId, newService->id, BluetoothGattTransportMode::GATT_TRANSPORT_MODE_LE_BR_EDR , callback);
 }
 
 bool BluetoothGattProfileService::removeLocalServer(uint16_t serverId, const std::string &adapterAddress)
@@ -3353,11 +3393,11 @@ bool BluetoothGattProfileService::removeLocalServer(uint16_t serverId, const std
 		if(serverIter.second->id == serverId)
 		{
 			BT_DEBUG("[%s](%d) getImpl->removeApplication\n", __FUNCTION__, __LINE__);
-			// The server is erased below in both cases, so it is freed in both cases; on a failed
-			// removeApplication it used to leak. Its services are freed only on that path: callbacks
-			// still in flight may hold raw LocalService pointers (see addService).
-			if(!getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(server->id, ApplicationType::SERVER))
-				server->removeAllLocalService();
+			// The server is erased below in both cases, so it and its services are freed in both cases: a
+			// failed removeApplication leaked the server, a successful one its services. No SIL callback holds
+			// them any more; they look the server up by id.
+			getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(server->id, ApplicationType::SERVER);
+			server->removeAllLocalService();
 			delete server;
 
 			mLocalServer.erase(serverIter.first);
@@ -3386,8 +3426,11 @@ bool BluetoothGattProfileService::removeLocalService(uint16_t serverId, const Bl
 	if (service == nullptr)
 		return false;
 
-	auto callback = [server, uuid](BluetoothError /*error*/) {
-		server->removeLocalService(uuid);
+	// The server is looked up again when the SIL answers: closeServer may have deleted it in between.
+	auto callback = [this, serverId, uuid](BluetoothError /*error*/) {
+		LocalServer *current = findLocalServer(serverId);
+		if (current)
+			current->removeLocalService(uuid);
 	};
 	BT_DEBUG("[%s](%d) getImpl->removeService\n", __FUNCTION__, __LINE__);
 	getImpl<BluetoothGattProfile>(adapterAddress)->removeService(server->id, service->id, callback);
@@ -3412,8 +3455,11 @@ bool BluetoothGattProfileService::removeLocalService(const BluetoothUuid &uuid, 
 		if (service == nullptr)
 			continue;
 
-		auto callback = [server, uuid](BluetoothError /*error*/) {
-			server->removeLocalService(uuid);
+		uint16_t serverId = server->id;
+		auto callback = [this, serverId, uuid](BluetoothError /*error*/) {
+			LocalServer *current = findLocalServer(serverId);	// may be gone by now
+			if (current)
+				current->removeLocalService(uuid);
 		};
 		BT_DEBUG("[%s](%d) getImpl->removeService\n", __FUNCTION__, __LINE__);
 		getImpl<BluetoothGattProfile>(adapterAddress)->removeService(serverIter.second->id, service->id, callback);
@@ -4032,12 +4078,56 @@ void BluetoothGattProfileService::writeLocalDescriptor(
 	safe_callback(callback, BLUETOOTH_ERROR_NONE);
 }
 
-void BluetoothGattProfileService::handleConnectClientDisappeared(const uint16_t &clientId, const uint16_t &connectId, const std::string &adapterAddress, const std::string &address)
+// One connect watch per device: a new one replaces the old, whose client is done with the device.
+void BluetoothGattProfileService::storeGattConnectWatch(const std::string &address, LSUtils::ClientWatch *watch)
 {
-	BT_INFO("BLE", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
+	removeGattConnectWatch(address);
+	mConnectWatches[address] = watch;
+}
+
+void BluetoothGattProfileService::removeGattConnectWatch(const std::string &address)
+{
 	auto watchIter = mConnectWatches.find(address);
 	if (watchIter == mConnectWatches.end())
 		return;
+
+	LSUtils::ClientWatch *watch = watchIter->second;
+	mConnectWatches.erase(watchIter);
+	delete watch;	// may be the watch whose callback is running; it is not touched afterwards
+}
+
+// connectedDeviceInfo entries were erased without being freed, and a second insert for an appId leaked the new one.
+void BluetoothGattProfileService::storeConnectedDevice(uint16_t appId, connectedDeviceInfo *info)
+{
+	eraseConnectedDevice(appId);
+	mConnectedDevices[appId] = info;
+}
+
+void BluetoothGattProfileService::eraseConnectedDevice(uint16_t appId)
+{
+	auto deviceIter = mConnectedDevices.find(appId);
+	if (deviceIter == mConnectedDevices.end())
+		return;
+
+	delete deviceIter->second;
+	mConnectedDevices.erase(deviceIter);
+}
+
+void BluetoothGattProfileService::handleConnectClientDisappeared(const uint16_t &clientIdRef, const uint16_t &connectIdRef, const std::string &adapterAddressRef, const std::string &addressRef)
+{
+	BT_INFO("BLE", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
+	// Copies: the arguments live in the watch's bound callback, and the watch goes below.
+	const uint16_t clientId = clientIdRef;
+	const uint16_t connectId = connectIdRef;
+	const std::string adapterAddress = adapterAddressRef;
+	const std::string address = addressRef;
+
+	auto watchIter = mConnectWatches.find(address);
+	if (watchIter == mConnectWatches.end())
+		return;
+	// The client is gone: its watch was kept for good, and fired again for whichever app connected the
+	// device next, disconnecting it under that app.
+	removeGattConnectWatch(address);
 
 	if (!getImpl<BluetoothProfile>(adapterAddress))
 		return;
@@ -4047,7 +4137,7 @@ void BluetoothGattProfileService::handleConnectClientDisappeared(const uint16_t 
 		BT_INFO("BLE", 0, "[%s](%d) disconnect from device %s complete\n", __FUNCTION__, __LINE__, address.c_str());
 		markDeviceAsNotConnected(adapterAddress,address);
 		markDeviceAsNotConnecting(adapterAddress,address);
-		mConnectedDevices.erase(clientId);
+		eraseConnectedDevice(clientId);
 		removeSubscriptionPoint(adapterAddress, address);
 		if (mConnectedDevicesMap.find(adapterAddress) != mConnectedDevicesMap.end())
 			mConnectedDevicesMap[adapterAddress].erase(address);
@@ -4108,7 +4198,7 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 				auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 									std::bind(&BluetoothGattProfileService::handleConnectClientDisappeared, this, 0, 0, adapterAddress, address));
 
-				mConnectWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(address, watch));
+				storeGattConnectWatch(address, watch);
 				subscribed = true;
 			}
 			markDeviceAsConnected(adapterAddress,address);
@@ -4119,7 +4209,7 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 				iterDevice->second->setConnectId(connectId);
 			}
 			else
-				mConnectedDevices.insert(std::pair<uint16_t, connectedDeviceInfo*>(appId, new connectedDeviceInfo(address, connectId)));
+				storeConnectedDevice(appId, new connectedDeviceInfo(address, connectId));
 
 			pbnjson::JValue responseObj = pbnjson::Object();
 
@@ -4211,11 +4301,11 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 						auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 											std::bind(&BluetoothGattProfileService::handleConnectClientDisappeared, this, 0, 0, adapterAddress, address));
 
-						mConnectWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(address, watch));
+						storeGattConnectWatch(address, watch);
 						subscribed = true;
 					}
 					markDeviceAsConnected(adapterAddress,address);
-					mConnectedDevices.insert(std::pair<uint16_t, connectedDeviceInfo*>(appId, new connectedDeviceInfo(address, 0)));
+					storeConnectedDevice(appId, new connectedDeviceInfo(address, 0));
 
 					pbnjson::JValue responseObj = pbnjson::Object();
 
@@ -4292,8 +4382,7 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 				subscribed = true;
 			}
 			markDeviceAsConnected(adapterAddress,address);
-			mConnectedDevices.insert(std::pair<uint16_t, connectedDeviceInfo*>
-					(appId, new connectedDeviceInfo(address, connectId)));
+			storeConnectedDevice(appId, new connectedDeviceInfo(address, connectId));
 
 			BT_INFO("BLE", 0, "[%s](%d) device %s connected appId:%d connectId:%d\n",
 						__FUNCTION__, __LINE__, address.c_str(), appId, connectId);
@@ -4391,8 +4480,9 @@ void BluetoothGattProfileService::disconnectToStack(LS::Message &request, pbnjso
 		BT_DEBUG("[%s](%d) getImpl->removeApplication\n", __FUNCTION__, __LINE__);
 		getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(appId, ApplicationType::CLIENT);
 		removeConnectWatchForDevice(adapterAddress, deviceAddress, true, false);
+		removeGattConnectWatch(deviceAddress);
 		removeSubscriptionPoint(adapterAddress, deviceAddress);
-		mConnectedDevices.erase(appId);
+		eraseConnectedDevice(appId);
 		markDeviceAsNotConnected(adapterAddress,deviceAddress);
 		markDeviceAsNotConnecting(adapterAddress,deviceAddress);
 		LSMessageUnref(request.get());

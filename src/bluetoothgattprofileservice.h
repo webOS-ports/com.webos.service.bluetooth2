@@ -380,8 +380,10 @@ class BluetoothGattProfileService : public BluetoothProfileService,
 	void addLocalService(const BluetoothUuid applicationUuid, const BluetoothGattService &service, BluetoothResultCallback callback, const std::string &adapterAddress);
 	void initCharacteristic(LocalService* newService); // TODO: Change name
 	bool hasNext(LocalService* newService);
-	void addLocalCharacteristic(LocalServer* server, LocalService* newService, const std::string &adapterAddress);
-	void addCharacteristicCallback(LocalServer* server, LocalService* newService, BluetoothError error, uint16_t charId, const std::string &adapterAddress);
+	void addLocalCharacteristic(uint16_t serverId, LocalService* newService, const std::string &adapterAddress);
+	void addCharacteristicCallback(uint16_t serverId, LocalService* newService, BluetoothError error, uint16_t charId, const std::string &adapterAddress);
+	bool isPendingService(LocalService *service) const;
+	void finishPendingService(LocalService *service, BluetoothError error);
 	bool removeLocalServer(uint16_t appId, const std::string &adapterAddress);
 	bool removeLocalService(uint16_t serverId, const BluetoothUuid &uuid, const std::string &adapterAddress);
 	bool removeLocalService(const BluetoothUuid &uuid, const std::string &adapterAddress);
@@ -523,6 +525,10 @@ private:
 	pbnjson::JValue buildCharacteristics(bool localAdapterServices, const BluetoothGattCharacteristicList &characteristicsList);
 	void notifyGetServicesSubscribers(bool localAdapterChanged, const std::string &adapterAddress, const std::string &deviceAddress, BluetoothGattServiceList serviceList);
 	bool parseValue(pbnjson::JValue valueObj, BluetoothGattValue *value);
+	void storeGattConnectWatch(const std::string &address, LSUtils::ClientWatch *watch);
+	void removeGattConnectWatch(const std::string &address);
+	void storeConnectedDevice(uint16_t appId, connectedDeviceInfo *info);
+	void eraseConnectedDevice(uint16_t appId);
 	void releaseCharacteristicWatch(const std::string &adapterAddress, const std::string &deviceAddress, uint16_t handle,
 	                                const BluetoothUuid &serviceUuid, const BluetoothUuid &characteristicUuid);
 	void handleMonitorCharacteristicClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);

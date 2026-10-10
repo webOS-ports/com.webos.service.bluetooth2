@@ -230,6 +230,7 @@ void BluetoothAvrcpProfileService::propertiesChanged(const std::string &adapterA
 	BluetoothProfileService::propertiesChanged(adapterAddress, address, properties);
 
 	bool connected = false;
+	bool connectionChanged = false;
 
 	for (auto prop : properties)
 	{
@@ -237,6 +238,7 @@ void BluetoothAvrcpProfileService::propertiesChanged(const std::string &adapterA
 		{
 			case BluetoothProperty::Type::CONNECTED:
 				connected = prop.getValue<bool>();
+				connectionChanged = true;
 				break;
 
 			default:
@@ -244,7 +246,9 @@ void BluetoothAvrcpProfileService::propertiesChanged(const std::string &adapterA
 		}
 	}
 
-	if(!connected)
+	// Only a disconnection clears the device's state; an update without CONNECTED used to as well. (bluez5
+	// always sends CONNECTED, other SILs need not.)
+	if (connectionChanged && !connected)
 	{
 		auto it = mRemoteVolumes.find(address);
 		if (it != mRemoteVolumes.end())
