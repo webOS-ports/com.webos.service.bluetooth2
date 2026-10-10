@@ -23,8 +23,8 @@ include(webOS/webOS)
 webos_modules_init(1 0 0 QUALIFIER RC7)
 webos_component(1 0 0)
 
-# Enable C++11 support (still gcc 4.6 so can't use -std=c++11)
-webos_add_compiler_flags(ALL -std=c++11 -Wall)
+# C++23, with the usual warnings on
+webos_add_compiler_flags(ALL -std=c++23 -Wall -Wextra)
 
 include(FindPkgConfig)
 
