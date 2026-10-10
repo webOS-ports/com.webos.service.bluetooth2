@@ -389,8 +389,12 @@ void BluetoothMeshProfileService::modelConfigResult(const std::string &adapterAd
 		{
 			if (BLUETOOTH_ERROR_NONE != error)
 			{
+				// Ended like a success: the watch stayed, and the next result for the same node and config
+				// went to this finished call instead of the one waiting for it.
 				LSUtils::respondWithError((*watch)->getMessage(), error, true);
-				return;
+				delete (*watch);
+				watch = mModelConfigResultWatch.erase(watch);
+				continue;
 			}
 			pbnjson::JValue object = pbnjson::Object();
 			object.put("subscribed", true);
@@ -774,6 +778,40 @@ void BluetoothMeshProfileService::updateNetworkId(const std::string &adapterAddr
 
 		}
 	}
+}
+
+// The stack refused the network createNetwork started, or the local node could not be attached to it: the network
+// is not usable, and the createNetwork callers waiting for its id (or holding it) get the error. They were told
+// nothing, and the service took the network for created, so a new createNetwork was refused as NETWORK_EXISTS.
+void BluetoothMeshProfileService::networkFailed(BluetoothError error, const std::string &adapterAddress)
+{
+	mNetworkCreated = false;
+	auto watch = mNetworkIdWatch.begin();
+	while (watch != mNetworkIdWatch.end())
+	{
+		if (convertToLower(adapterAddress) != convertToLower((*watch)->getAdapterAddress()))
+		{
+			++watch;
+			continue;
+		}
+		LSUtils::respondWithError((*watch)->getMessage(), error, true);
+		delete (*watch);
+		watch = mNetworkIdWatch.erase(watch);
+	}
+}
+
+void BluetoothMeshProfileService::createNetworkResult(BluetoothError error, const std::string &adapterAddress)
+{
+	BT_INFO("MESH", 0, "[%s : %d], error: %d", __FUNCTION__, __LINE__, error);
+	if (BLUETOOTH_ERROR_NONE != error)	// on success, updateNetworkId follows with the id
+		networkFailed(error, adapterAddress);
+}
+
+void BluetoothMeshProfileService::attachResult(BluetoothError error, const std::string &adapterAddress)
+{
+	BT_INFO("MESH", 0, "[%s : %d], error: %d", __FUNCTION__, __LINE__, error);
+	if (BLUETOOTH_ERROR_NONE != error)
+		networkFailed(error, adapterAddress);
 }
 
 bool BluetoothMeshProfileService::provision(LSMessage &message)
