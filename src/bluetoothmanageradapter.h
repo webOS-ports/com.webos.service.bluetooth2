@@ -24,6 +24,7 @@
 #include <bluetooth-sil-api.h>
 
 #include "bluetoothpairstate.h"
+#include "bluetoothserviceclasses.h"
 
 namespace LSUtils
 {
@@ -38,7 +39,6 @@ namespace LS
 
 class BluetoothManagerService;
 class BluetoothDevice;
-class BluetoothServiceClassInfo;
 
 class BluetoothManagerAdapter: public BluetoothAdapterStatusObserver
 {
