@@ -148,3 +148,23 @@ TEST_F(StorageDir, CheckFileIsValidWantsARegularFile)
 
 	EXPECT_FALSE(checkFileIsValid("/dev/zero"));
 }
+
+TEST_F(StorageDir, PermissionChangesTakeNamesLiterally)
+{
+	// The name went into an unquoted "sh -c" command line: the ";" ended the chmod and ran the rest.
+	std::string name = base + "/a;touch pwned $(id)";
+	writeFile(name);
+	ASSERT_EQ(chmod(name.c_str(), 0644), 0);
+
+	EXPECT_TRUE(changeFilePermission("600", name));
+	struct stat st = {};
+	ASSERT_EQ(stat(name.c_str(), &st), 0);
+	EXPECT_EQ(st.st_mode & 0777, 0600u);
+	EXPECT_FALSE(g_file_test("pwned", G_FILE_TEST_EXISTS));
+}
+
+TEST_F(StorageDir, FailedPermissionChangeIsReported)
+{
+	// It returned true whatever chmod made of it.
+	EXPECT_FALSE(changeFilePermission("not-a-mode", base + "/file.txt"));
+}
