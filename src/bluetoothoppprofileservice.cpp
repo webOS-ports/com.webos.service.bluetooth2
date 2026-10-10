@@ -865,15 +865,21 @@ void BluetoothOppProfileService::transferStateChanged(BluetoothOppTransferId tra
 	if (mTransferIds.size())
 	{
 		uint64_t requestListIndex = 0;
+		bool known = false;
 
 		for (auto transferIter : mTransferIds)
 		{
 			if (transferId == transferIter.second)
 			{
 				requestListIndex = (int64_t) transferIter.first;
+				known = true;
 				break;
 			}
 		}
+
+		// An unknown transfer used to fall back to index 0 and update, or finish and delete, the first request.
+		if (!known)
+			return;
 
 		auto updateRequest = mPushRequests.find(requestListIndex);
 		if (updateRequest == mPushRequests.end())
