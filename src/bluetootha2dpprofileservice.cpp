@@ -484,7 +484,11 @@ bool BluetoothA2dpProfileService::getAudioPath(LSMessage &message)
 		else if (mAudioSocketInfo->type == BluetoothA2dpAudioSocketType::UDP)
 			responseObj.put("type", "udp");
 		else
+		{
+			// One reply: the success reply used to follow this error.
 			LSUtils::respondWithError(request, BT_ERR_A2DP_GET_SOCKET_PATH_FAILED);
+			return true;
+		}
 
 		responseObj.put("direction", mAudioSocketInfo->isIn);
 

@@ -420,8 +420,10 @@ bool BluetoothAvrcpProfileService::supplyMediaMetaData(LSMessage &message)
 
 	BT_INFO("AVRCP", 0, "Service calls SIL API : supplyMediaMetaData");
 	getImpl<BluetoothAvrcpProfile>(adapterAddress)->supplyMediaMetaData(requestId, metaData, requestCallback);
-	deleteMediaRequest(true, requestIdStr, adapterAddress);
+	// The id first: it is found through the request, which deleting the request first made impossible, so
+	// the id of the request at index 0 was erased instead and this one leaked.
 	deleteMediaRequestId(true, requestIdStr, adapterAddress);
+	deleteMediaRequest(true, requestIdStr, adapterAddress);
 
 	return true;
 }
@@ -515,7 +517,7 @@ bool BluetoothAvrcpProfileService::supplyMediaPlayStatus(LSMessage &message)
 	}
 
 	BluetoothProfile *impl = findImpl(adapterAddress);
-	if (!impl && getImpl<BluetoothAvrcpProfile>(adapterAddress))
+	if (!impl && !getImpl<BluetoothAvrcpProfile>(adapterAddress))	// the second test was inverted
 	{
 		LSUtils::respondWithError(request, BT_ERR_PROFILE_UNAVAIL);
 		return true;
@@ -550,8 +552,10 @@ bool BluetoothAvrcpProfileService::supplyMediaPlayStatus(LSMessage &message)
 
 	BT_INFO("AVRCP", 0, "Service calls SIL API : supplyMediaPlayStatus");
 	getImpl<BluetoothAvrcpProfile>(adapterAddress)->supplyMediaPlayStatus(requestId, playStatus, requestCallback);
-	deleteMediaRequest(false, requestIdStr, adapterAddress);
+	// The id first: it is found through the request, which deleting the request first made impossible, so
+	// the id of the request at index 0 was erased instead and this one leaked.
 	deleteMediaRequestId(false, requestIdStr, adapterAddress);
+	deleteMediaRequest(false, requestIdStr, adapterAddress);
 
 	return true;
 }
@@ -1114,8 +1118,16 @@ bool BluetoothAvrcpProfileService::setPlayerApplicationSettings(LSMessage &messa
 	}
 	else
 	{
+		// The availability check at the top passes when any adapter has the profile; this one may not.
+		BluetoothAvrcpProfile *avrcp = getImpl<BluetoothAvrcpProfile>(adapterAddress);
+		if (!avrcp)
+		{
+			LSUtils::respondWithError(request, BT_ERR_PROFILE_UNAVAIL);
+			return true;
+		}
+
 		BT_INFO("AVRCP", 0, "Service calls SIL API : setPlayerApplicationSettingsProperties");
-		getImpl<BluetoothAvrcpProfile>(adapterAddress)->
+		avrcp->
 			setPlayerApplicationSettingsProperties(propertiesToChange,
 					std::bind(&BluetoothAvrcpProfileService::handlePlayserApplicationSettingsPropertiesSet,
 						this, propertiesToChange, request, adapterAddress, deviceAddress, _1));
@@ -2399,6 +2411,10 @@ void BluetoothAvrcpProfileService::deleteMediaRequestId(
 	{
 		requests = &mMediaPlayStatusRequestIdsMultiAdapters;
 	}
+	// getRequestIndex() answers 0, a valid index, for a request it does not know.
+	if (!findMediaRequest(metaData, requestIdStr, adapterAddress))
+		return;
+
 	uint64_t requestIndex = getRequestIndex(metaData, requestIdStr, adapterAddress);
 	auto idIter = requests->find(requestIndex);
 	if (idIter != requests->end())
@@ -2626,7 +2642,10 @@ void BluetoothAvrcpProfileService::notifyConfirmationRequest(LS::Message &reques
 	pbnjson::JValue responseObj = pbnjson::Object();
 	if (!success)
 	{
+		// One reply: a second one with returnValue false used to follow the error.
 		LSUtils::respondWithError(request, BT_ERR_AVRCP_STATE_ERR);
+		LSMessageUnref(request.get());
+		return;
 	}
 
 	responseObj.put("returnValue", success);
@@ -3124,6 +3143,7 @@ bool BluetoothAvrcpProfileService::getNumberOfItems(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -3195,6 +3215,7 @@ bool BluetoothAvrcpProfileService::getFolderItems(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -3487,6 +3508,7 @@ bool BluetoothAvrcpProfileService::search(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -3567,6 +3589,7 @@ bool BluetoothAvrcpProfileService::notifyMediaPlayStatus(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 
