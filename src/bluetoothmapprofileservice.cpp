@@ -404,28 +404,38 @@ void BluetoothMapProfileService::handleConnectClientDisappeared(const std::strin
 	auto watchIter = (watchesIter->second).find(sessionKey);
 	if (watchIter == (watchesIter->second).end())
 		return;
+	LSUtils::ClientWatch *watch = watchIter->second;
 
-	auto disconnectCallback = [=, this](BluetoothError /*error*/, const std::string &/*instanceName*/) {
+	// Removes the watch only if it is still this one. The callback used to keep the map iterators across the
+	// asynchronous disconnect; when the link dropped meanwhile, removeConnectWatchForDevice() had already
+	// erased that node and deleted the watch, and the callback erased and deleted them again.
+	auto removeWatch = [this, adapterAddress, sessionKey, watch]() {
+		auto watches = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
+		if (watches == mConnectWatchesForMultipleAdaptersWithSessionKey.end())
+			return;
+		auto entry = watches->second.find(sessionKey);
+		if (entry == watches->second.end() || entry->second != watch)
+			return;
+		watches->second.erase(entry);
+		delete watch;
+	};
+
+	auto disconnectCallback = [this, adapterAddress, sessionKey, removeWatch](BluetoothError /*error*/, const std::string &/*instanceName*/) {
 		handleMessageNotificationClientDisappeared(adapterAddress,sessionKey);
 		removeDeviceAsConnectedWithSessionKey(adapterAddress, sessionKey);
 		markDeviceAsNotConnected(adapterAddress, sessionKey);
 		markDeviceAsNotConnecting(adapterAddress, sessionKey);
 		notifyGetStatusSubscribers(adapterAddress, sessionKey);
-		if(watchIter->second)
-		{
-			LSUtils::ClientWatch *watch = watchIter->second;
-			(watchesIter->second).erase(watchIter);
-			delete watch;
-		}
+		removeWatch();
 	};
 
-	std::string address = parseAddressFromSessionKey(sessionKey);
 	std::string sessionId = getSessionId(adapterAddress, sessionKey);
+	BluetoothMapProfile *impl = getImpl<BluetoothMapProfile>(adapterAddress);
 
-	if(!sessionId.empty())
-	{
-		getImpl<BluetoothMapProfile>(adapterAddress)->disconnect(sessionKey, sessionId, disconnectCallback);
-	}
+	if (!sessionId.empty() && impl)
+		impl->disconnect(sessionKey, sessionId, disconnectCallback);
+	else
+		removeWatch();	// nothing to disconnect; the watch used to stay
 }
 
 
