@@ -123,3 +123,23 @@ TEST(PairState, ForgettingAnotherDeviceKeepsTheOneBeingPaired)
 	EXPECT_EQ(state.getDevice(), &paired);
 	state.stopPairing();
 }
+
+TEST(ChannelManager, TwoDevicesOnTheSameUuidKeepTheirOwnChannels)
+{
+	// Both on the standard SPP uuid: the second channel used to be dropped by the map keyed by uuid.
+	ChannelManager manager;
+	std::string first = manager.markChannelAsConnected(11, "00:11:22:33:44:01", "00001101-0000-1000-8000-00805f9b34fb");
+	std::string second = manager.markChannelAsConnected(12, "00:11:22:33:44:02", "00001101-0000-1000-8000-00805f9b34fb");
+	ASSERT_NE(first, second);
+	EXPECT_TRUE(manager.isChannelConnected(11));
+	EXPECT_TRUE(manager.isChannelConnected(12));
+	EXPECT_EQ(manager.getUserChannelId(12), second);
+
+	const uint8_t other[] = { 'x', 'y' };
+	manager.addReceiveQueue("adapter", 12, other, sizeof(other));
+	pumpFor(20);
+	const ChannelManager::DataBuffer *buffer = manager.getChannelBufferData(second, "");
+	ASSERT_NE(buffer, nullptr);
+	EXPECT_EQ(buffer->size, sizeof(other));
+	delete buffer;
+}

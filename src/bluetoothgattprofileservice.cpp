@@ -1594,6 +1594,8 @@ bool BluetoothGattProfileService::getConnectId(uint16_t clientId, uint16_t &conn
 			if (clientId == entry.second)
 			{
 				deviceAddress = convertToLower(entry.first);
+				// The client id, as connection id: bluez5 keys a GATT connection by one id that is both
+				// (Bluez5ProfileGatt::getConnectId returns the key disconnectGatt takes as the app id).
 				connectId = entry.second;
 				return true;
 			}

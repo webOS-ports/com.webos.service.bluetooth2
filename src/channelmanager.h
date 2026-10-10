@@ -115,7 +115,9 @@ private:
 	} CreateChannelInfo;
 
 	uint32_t mNextChannelId;
-	std::map<std::string, ChannelInfo *> mChannelInfo;
+	// By uuid, several per uuid: SPP devices normally share the standard SPP uuid, and a second connection used
+	// to fail to insert, leaking its channel and dropping its data. Lookups by channel id are unambiguous.
+	std::multimap<std::string, ChannelInfo *> mChannelInfo;
 	std::unordered_map<std::string, CreateChannelInfo *> mCreateChannelSubscriptons;
 	std::vector<ReadDataInfo *> mReadDataSubscriptions;
 	std::vector<std::string> mConnectingChannels;
