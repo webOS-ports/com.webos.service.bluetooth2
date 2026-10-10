@@ -102,18 +102,15 @@ bool checkFileIsValid(const std::string &path)
 */
 void write_kernel_log(const char *message)
 {
-   int fd;
-   char buffer[1024];
-
-
-	fd = open("/dev/kmsg", O_RDWR);
-	if( fd<0 ) {
+	// One write() is one kernel log record. This used to strncat() the message onto an uninitialised stack
+	// buffer, which appended it after whatever the stack held and could run past the buffer.
+	int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	if (fd < 0) {
 		BT_DEBUG("open fail : /dev/kmsg\n");
 		return;
 	}
 
-	std::strncat(buffer, message, sizeof(buffer)-1);
-	auto ret = write(fd, buffer, strlen(buffer)+1);
+	auto ret = write(fd, message, strlen(message));
 	static_cast<void>(ret);
 	close(fd);
 }
