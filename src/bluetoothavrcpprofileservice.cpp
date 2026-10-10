@@ -16,6 +16,8 @@
 
 
 #include "bluetoothavrcpprofileservice.h"
+
+#include <algorithm>
 #include "bluetoothmanagerservice.h"
 #include "bluetoothmanageradapter.h"
 #include "bluetoothdevice.h"
@@ -1511,9 +1513,10 @@ bool BluetoothAvrcpProfileService::addClientWatch(LS::Message& request, std::lis
 			return false;
 		}
 	}
-	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(),
-		std::bind(&BluetoothAvrcpProfileService::handleClientDisappeared,
-			this, clientWatch, senderName), adapterAddress, deviceAddress);
+	// The callback removes this watch only. It removed every watch of the same application, so cancelling
+	// one subscription (say, for device A) silently ended the app's others (device B).
+	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(), nullptr, adapterAddress, deviceAddress);
+	watch->setCallback(std::bind(&BluetoothAvrcpProfileService::handleClientDisappeared, this, clientWatch, watch));
 	clientWatch->push_back(watch);
 	return true;
 }
@@ -1745,33 +1748,14 @@ std::vector<std::string>* BluetoothAvrcpProfileService::findRemoteFeatures(const
 	return features;
 }
 
-void BluetoothAvrcpProfileService::removeClientWatch(std::list<BluetoothClientWatch*> *clientWatch, const std::string& senderName)
+void BluetoothAvrcpProfileService::removeClientWatch(std::list<BluetoothClientWatch*> *clientWatch, BluetoothClientWatch *watch)
 {
-	auto watch = clientWatch->begin();
-	while (watch != clientWatch->end())
-	{
+	auto found = std::find(clientWatch->begin(), clientWatch->end(), watch);
+	if (found == clientWatch->end())
+		return;
 
-		const char* senderNameWatch = LSMessageGetApplicationID((*watch)->getMessage());
-		if (senderNameWatch == NULL)
-		{
-			senderNameWatch = LSMessageGetSenderServiceName((*watch)->getMessage());
-			if (senderNameWatch == NULL)
-			{
-				return;
-			}
-		}
-
-		if (senderName == senderNameWatch)
-		{
-			auto watchToRemove = watch;
-			delete (*watchToRemove);
-			watch = clientWatch->erase(watch);
-		}
-		else
-		{
-			++watch;
-		}
-	}
+	clientWatch->erase(found);
+	delete watch;	// may be the watch whose callback is running; it is not touched afterwards
 }
 
 void BluetoothAvrcpProfileService::removeReceivePassThroughCommandWatchForDevice(const std::string &address)
@@ -1796,9 +1780,9 @@ void BluetoothAvrcpProfileService::removeReceivePassThroughCommandWatchForDevice
 	delete watch;
 }
 
-void BluetoothAvrcpProfileService::handleClientDisappeared(std::list<BluetoothClientWatch*>* clientWatch, const std::string senderName)
+void BluetoothAvrcpProfileService::handleClientDisappeared(std::list<BluetoothClientWatch*>* clientWatch, BluetoothClientWatch *watch)
 {
-	removeClientWatch(clientWatch, senderName);
+	removeClientWatch(clientWatch, watch);
 }
 
 void BluetoothAvrcpProfileService::removeGetSupportedNotificationEventsWatchForDevice(const std::string &address)

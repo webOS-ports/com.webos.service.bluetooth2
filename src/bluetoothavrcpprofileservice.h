@@ -154,9 +154,9 @@ private:
 	void notifyConfirmationRequest(LS::Message &request, const std::string &requestId, const std::string &adapterAddress, bool success);
 	void parseMediaMetaData(const pbnjson::JValue &dataObj, BluetoothMediaMetaData *data);
 	void parseMediaPlayStatus(const pbnjson::JValue &dataObj, BluetoothMediaPlayStatus *status);
-	void removeClientWatch(std::list<BluetoothClientWatch*> *clientWatch, const std::string& senderName);
+	void removeClientWatch(std::list<BluetoothClientWatch*> *clientWatch, BluetoothClientWatch *watch);
 	void removeReceivePassThroughCommandWatchForDevice(const std::string &address);
-	void handleClientDisappeared(std::list<BluetoothClientWatch*>* clientWatch, const std::string senderName);
+	void handleClientDisappeared(std::list<BluetoothClientWatch*>* clientWatch, BluetoothClientWatch *watch);
 	void removeGetSupportedNotificationEventsWatchForDevice(const std::string &address);
 
 	std::string mediaPlayStatusToString(BluetoothMediaPlayStatus::MediaPlayStatus status);

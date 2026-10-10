@@ -631,7 +631,11 @@ bool BluetoothA2dpProfileService::getCodecConfiguration(LSMessage &message)
 		auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 		                    std::bind(&BluetoothA2dpProfileService::handleGetCodecConfigurationClientDisappeared, this, adapterAddress, deviceAddress));
 
-		mGetCodecConfigurationWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(deviceAddress, watch));
+		// One subscription per device: the new one replaces the old, whose client is told it ended. The
+		// insert used to fail silently, leaving the new watch registered but unused; when that client went
+		// away it removed the other client's subscription instead.
+		removeGetCodecConfiguraionForDevice(deviceAddress, false, false);
+		mGetCodecConfigurationWatches[deviceAddress] = watch;
 		subscribed = true;
 	}
 
