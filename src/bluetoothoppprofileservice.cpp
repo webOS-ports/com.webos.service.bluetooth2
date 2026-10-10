@@ -62,6 +62,13 @@ BluetoothOppProfileService::~BluetoothOppProfileService()
 {
 	for (auto &subscription : mMonitorTransferSubscriptions)
 		delete subscription.second;
+	// Also left at shutdown: transfers, pending push requests and awaitTransferRequest subscribers.
+	for (auto &transfer : mTransfers)
+		delete transfer.second;
+	for (auto &pushRequest : mPushRequests)
+		delete pushRequest.second;
+	for (auto watch : mIncomingTransferWatchesForMultipleAdapters)
+		delete watch;
 }
 
 void BluetoothOppProfileService::initialize()
@@ -993,18 +1000,31 @@ bool BluetoothOppProfileService::prepareConfirmationRequest(LS::Message &request
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto transferCallback = [this, adapterAddress, requestMessage](BluetoothError error) {
+	auto transferCallback = [this, adapterAddress, requestMessage, requestIdStr, accept](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (BLUETOOTH_ERROR_NONE != error)
+		{
 			notifyConfirmationRequest(request, adapterAddress, false);
+			// An accept the SIL refused (the push was given up meanwhile) has nothing left to wait for.
+			if (accept)
+			{
+				deleteTransferId(requestIdStr);
+				deletePushRequest(requestIdStr);
+			}
+		}
 		else
 			notifyConfirmationRequest(request, adapterAddress, true);
 	};
 	getImpl<BluetoothOppProfile>(adapterAddress)->supplyTransferConfirmation(transferId, accept, transferCallback);
 
+	// A rejected request is finished: it stayed in mPushRequests until 999 newer ones pushed it out. The transfer
+	// id goes first, as it is found through the request.
 	if (!accept)
+	{
 		deleteTransferId(requestIdStr);
+		deletePushRequest(requestIdStr);
+	}
 
 	return true;
 }
