@@ -160,6 +160,7 @@ public:
 	void notifySubscriberLeDevicesChangedbyScanId(uint32_t scanId, BluetoothDevice *device = NULL);
 
 	void notifyStartScanListenerDropped(uint32_t scanId);
+	void removeStartScan(uint32_t scanId);
 	bool notifyPairingListenerDropped(bool incoming);
 
 	void startPairing(BluetoothDevice *device);

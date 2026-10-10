@@ -2138,8 +2138,28 @@ void BluetoothManagerAdapter::notifyStartScanListenerDropped(uint32_t scanId)
 
 	LSUtils::postToClient(watch->getMessage(), responseObj);
 
-	mStartScanWatches.erase(watchIter);
-	delete watch;
+	removeStartScan(scanId);
+}
+
+// Ends an LE scan subscription: its watch, filter and the devices found for it, which leaked; discovery stops
+// with the last one.
+void BluetoothManagerAdapter::removeStartScan(uint32_t scanId)
+{
+	auto watchIter = mStartScanWatches.find(scanId);
+	if (watchIter != mStartScanWatches.end())
+	{
+		LSUtils::ClientWatch *watch = watchIter->second;
+		mStartScanWatches.erase(watchIter);
+		delete watch;	// may be the watch whose callback is running; it is not touched afterwards
+	}
+
+	auto devicesIter = mLeDevicesByScanId.find(scanId);
+	if (devicesIter != mLeDevicesByScanId.end())
+	{
+		for (auto &device : devicesIter->second)
+			delete device.second;
+		mLeDevicesByScanId.erase(devicesIter);
+	}
 
 	mAdapter->removeLeDiscoveryFilter(scanId);
 
@@ -2435,6 +2455,10 @@ bool BluetoothManagerAdapter::startScan(LS::Message &request, pbnjson::JValue &r
 
 	if (error != BLUETOOTH_ERROR_NONE)
 	{
+		// The failed scan's watch and filter used to stay: discovery then never started again, as the next
+		// subscriber no longer made the list one entry long.
+		if (subscribed)
+			removeStartScan(leScanId);
 		LSUtils::respondWithError(request, BT_ERR_START_DISC_FAIL);
 		return true;
 	}
