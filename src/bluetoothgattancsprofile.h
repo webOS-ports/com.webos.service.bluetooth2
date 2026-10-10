@@ -18,6 +18,7 @@
 #ifndef BLUETOOTHGATTANCSPROFILE_H_
 #define BLUETOOTHGATTANCSPROFILE_H_
 
+#include "ancsparser.h"
 #include "bluetoothgattprofileservice.h"
 #include <bluetooth-sil-api.h>
 #include <luna-service2/lunaservice.hpp>
@@ -39,9 +40,7 @@
 #define ANCS_CATEGORY_MAX_RESERVED_VALUE 255
 
 #define COMMAND_ID_GET_APP_ATTRIBUTES 1
-#define COMMAND_ID_GET_NOTIFICATION_ATTRIBUTES 0
 #define MESSAGE_TIMEOUT 30
-#define MAX_UINT16 0xffff
 #define MAX_CHAR 0xff
 
 #define ANCS_RESERVED "Reserved"
@@ -52,27 +51,6 @@ namespace LSUtils
 {
         class ClientWatch;
 }
-
-class NotificationAttr {
-public:
-	uint8_t attrId;
-	std::string value;
-	bool found =false;
-	NotificationAttr(uint8_t id) : attrId(id), found(false) {}
-};
-
-class NotificationIdQueryInfo
-{
-public:
-	std::string deviceAddress;
-	int32_t notificationId;
-	std::vector <NotificationAttr> attrList;
-	uint16_t readingAttr;
-	uint16_t attrLenByte1;
-	int remainingLen;
-	time_t startTime;
-	LSMessage *requestMessage;
-} ;
 
 class BluetoothGattAncsProfile: public BluetoothGattProfileService {
 

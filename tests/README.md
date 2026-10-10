@@ -14,7 +14,8 @@ GoogleTest suites for the parts that work without a bus, linked with the service
   (without SIGPIPE), a second client replacing the first, back-pressure and large writes arriving whole
   and in order, removing the socket with a retry pending;
 - the channel manager's queued data and read-subscription timers, and the pair state when the device
-  being paired is removed.
+  being paired is removed;
+- the ANCS parser, on notification source values and data source blocks split every way.
 
 Build them with the component, off by default:
 
@@ -29,6 +30,21 @@ the build host the x86-64 build runs through its recipe sysroot's loader:
 
 Each fix, put back into the service, makes at least one test fail; most of them only under
 AddressSanitizer, so run the suite with `-fsanitize=address,undefined` too.
+
+The ANCS tests feed `ancsparser.cpp` data source responses cut into blocks at the awkward places: a value,
+an attribute length or an id split across blocks, a block that starts with attribute 0 (which used to be taken
+for a new header), the rest of an attribute nobody asked for.
+
+## Fuzzing (`tests/fuzz/`)
+
+`fuzz_ancsparser.cpp` is a libFuzzer target for the ANCS parser, which parses what a phone sends. It needs clang:
+
+    cmake -DBUILD_TESTING=ON -DBUILD_FUZZING=ON -DCMAKE_CXX_COMPILER=clang++ ...
+    ninja fuzz-ancsparser
+    ./tests/fuzz-ancsparser -max_total_time=3600 corpus/
+
+Besides AddressSanitizer and UBSan it aborts when the parser's state stops making sense (a pending length with
+no attribute, a length beyond 65535).
 
 ## Hardening (`tests/hardening/`)
 

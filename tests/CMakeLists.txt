@@ -49,3 +49,12 @@ target_link_libraries(webos-bluetooth-service-tests
     rt pthread dl luna-service2++ ${EXT_LIBS})
 
 add_test(NAME webos-bluetooth-service-unit COMMAND webos-bluetooth-service-tests)
+
+# libFuzzer target for what an ANCS provider sends (clang only, -DBUILD_FUZZING=ON). It links the parser alone.
+option(BUILD_FUZZING "Build the libFuzzer targets (clang)" OFF)
+if(BUILD_FUZZING)
+    add_executable(fuzz-ancsparser fuzz/fuzz_ancsparser.cpp ${PROJECT_SOURCE_DIR}/src/ancsparser.cpp)
+    target_include_directories(fuzz-ancsparser PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(fuzz-ancsparser PRIVATE -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all)
+    target_link_options(fuzz-ancsparser PRIVATE -fsanitize=fuzzer,address,undefined)
+endif()

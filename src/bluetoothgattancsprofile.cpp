@@ -755,18 +755,15 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 		if (notificationIter != mAwaitNotificationSubscriptions.end())
 		{
 			LS::SubscriptionPoint *subscriptionPoint = notificationIter->second;
-			BluetoothGattValue values = characteristic.getValue();
-			BT_DEBUG("Found notification source characteristic value of size %zu", values.size());
-			// Eight bytes from the remote device, which were read whatever it had sent.
-			if (values.size() < 8)
+			AncsNotificationEvent event;
+			if (!parseAncsNotificationSource(characteristic.getValue(), event))
 				return;
 
-			int eventID = (int32_t) values[0];
-			int eventFlags = (int32_t) values[1];
-			int categoryID = (int32_t) values[2];
-			int categoryCount = (int32_t) values[3];
-
-			int32_t notificationUid = (int32_t)(values[4] | (values[5] << 8) | (values[6] << 16) | ((uint32_t)values[7] << 24));
+			int eventID = event.eventId;
+			int eventFlags = event.eventFlags;
+			int categoryID = event.categoryId;
+			int categoryCount = event.categoryCount;
+			int32_t notificationUid = (int32_t)event.notificationUid;
 
 			//Build response
 			pbnjson::JValue responseObj = pbnjson::Object();
@@ -818,133 +815,13 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 		std::stringstream buffer;
 		std::copy (values.begin(), values.end(), std::ostream_iterator<uint8_t>(buffer, ", "));
 		BT_DEBUG ("values %s", buffer.str().c_str());
-		int index = 0;
 		if (!mNotificationQueryInfo)
 		{
 			BT_DEBUG("ANCS QueryInfo object empty");
 			return;
 		}
-		// Every read below is bounded by what the remote device sent; several were not.
-		if (vSize == 0)
-			return;
-		//Ancs block sizes are roughly 155 bytes long. When queried for multiple notification attributes,  the combined response length can
-		//exceed this block size or message size may be longer than max block size.
-		//Ancs chunks the response with only the first block containing the COMMAND_ID, and subsequent blocks containing only contiguous data
-		//To handle responses spanning multiple blocks, we maintain required information in mNotificationQueryInfo object.
-		//which is updated after reading a complete attribute or when a new block is received.
-		if (values[index] == COMMAND_ID_GET_NOTIFICATION_ATTRIBUTES)
-		{
-			//Case 1:Incoming block format [0:CommandId], [1-4: NotificationId],[5-vSize : attr1]
-			if (vSize < 8)
-			{
-				BT_DEBUG("ANCS data source characteristic value  has no attribute");
-				return;
-			}
-			int32_t notificationId = (int32_t)(values[index + 1] | (values[index + 2] << 8) | (values[index + 3] << 16) | ((uint32_t)values[index + 4] << 24));
-			index += 5;
-			BT_DEBUG("ANCS notificationId=%d", notificationId);
 
-		}
-		else if (mNotificationQueryInfo->remainingLen == -1 && mNotificationQueryInfo->readingAttr != MAX_UINT16)
-		{
-			if (mNotificationQueryInfo->attrLenByte1 == MAX_UINT16)
-			{
-				//Case 3:Previous block: [0 to n :attr1-id-data][n+1 to (vSize -2): attr2 id and data][vsize-1: attr3 Id]
-				//		 Current block:  [0 and 1: attr3 len_bytes_1_2][[1-n: attr3 data]....
-				if (vSize < 2)
-					return;
-				mNotificationQueryInfo->remainingLen = values[index] | (values[index + 1] << 8);
-				index += 2;
-			}
-			else
-			{
-				//Case 2:Previous block: [0 to n :attr1-id-data][n+1 to (vSize -2): attr2 id and data][vsize-2: attr3Id] [vsize-1: attr3 len_1st_byte]
-				//		 Current block:  [0 :attr3 len_2nd_byte][1-n: attr3 data]....
-				mNotificationQueryInfo->remainingLen = mNotificationQueryInfo->attrLenByte1 | values[index++] <<8;
-				mNotificationQueryInfo->attrLenByte1 = MAX_UINT16;
-			}
-		}
-		if (mNotificationQueryInfo->remainingLen > 0  && mNotificationQueryInfo->readingAttr != MAX_UINT16)
-		{
-			//Case 4: [0 - x: data overflowed from previous block] [x+1 - vSize :attrN]
-			//Continuation of case 2 and case 3
-			for (auto attrStatus = mNotificationQueryInfo->attrList.begin(); attrStatus!=mNotificationQueryInfo->attrList.end(); attrStatus++)
-			{
-				if (attrStatus->attrId == mNotificationQueryInfo->readingAttr)
-				{
-					// What is left of this block after the length bytes, not the whole block.
-					size_t len = mNotificationQueryInfo->remainingLen;
-					size_t available = (size_t)(vSize - index);
-					if (len > available)
-					{
-						mNotificationQueryInfo->remainingLen = (int)(len - available);
-						len = available;
-					}
-					else
-					{
-						mNotificationQueryInfo->remainingLen = -1;
-						attrStatus->found = true;
-						mNotificationQueryInfo->readingAttr = MAX_UINT16;
-					}
-
-					attrStatus->value.append(values.begin() + index , values.begin()+ index + len);
-					index = index+len;
-					break;
-				}
-			}
-		}
-
-		while(index < vSize)
-		{
-			int32_t attrId = values[index++];
-			mNotificationQueryInfo->readingAttr = attrId;
-			// In this order: with the attribute id as the last byte, the length byte was read past the end.
-			if (index >= vSize)
-			{ //last byte was attrId
-				break;
-			}
-			if (index+1 >= vSize)
-			{
-				//last byte was 1st byte of attrLen
-				mNotificationQueryInfo->attrLenByte1 = values[index++];
-				break;
-			}
-			int32_t attributeLen = values[index] | (values[index + 1] << 8);
-			index += 2;
-
-			BT_DEBUG("attrId %d attributeLen %d", attrId, attributeLen);
-
-			std::string attrValue;
-			int valLen = (index + attributeLen >= vSize) ? (vSize - index) : attributeLen;
-			attrValue.assign(values.begin() + index, values.begin() + index + valLen);
-
-			index = index + valLen;
-
-			for (auto attrStatus = mNotificationQueryInfo->attrList.begin(); attrStatus != mNotificationQueryInfo->attrList.end(); attrStatus++)
-			{
-				if (attrStatus->attrId == attrId)
-				{
-					attrStatus->value = attrValue;
-					if (valLen == attributeLen)
-					{
-						attrStatus->found = true;
-						mNotificationQueryInfo->readingAttr = MAX_UINT16;
-						BT_DEBUG("attributeId %d, value %s", attrId, attrValue.c_str());
-					}
-					mNotificationQueryInfo->remainingLen = attributeLen - valLen;
-					break;
-				}
-			}
-		}
-		//compose the response
-		bool foundAllAttributes = true;
-		for (auto attrStatus = mNotificationQueryInfo->attrList.begin(); attrStatus != mNotificationQueryInfo->attrList.end(); attrStatus++)
-		{
-			if (!attrStatus->found)
-			{
-				foundAllAttributes = false;
-			}
-		}
+		bool foundAllAttributes = parseAncsDataSourceBlock(*mNotificationQueryInfo, values);
 
 		if (foundAllAttributes)
 		{
@@ -1132,11 +1009,8 @@ bool BluetoothGattAncsProfile::queryNotificationAttributes(LSMessage &message)
 	value.push_back(notificationId >> 24 & 0xff);
 
 	mNotificationQueryInfo = new NotificationIdQueryInfo();
-	mNotificationQueryInfo->readingAttr = MAX_UINT16;
-	mNotificationQueryInfo->attrLenByte1 = MAX_UINT16;
 	mNotificationQueryInfo->deviceAddress = deviceAddress;
 	mNotificationQueryInfo->notificationId = notificationId;
-	mNotificationQueryInfo->remainingLen = -1;
 
 	for (int j = 0; j < attributesObj.arraySize(); j++)
 	{
