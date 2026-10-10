@@ -1776,7 +1776,9 @@ bool BluetoothManagerAdapter::unpair(LS::Message &request, pbnjson::JValue &requ
 	auto unpairCallback = [requestMessage, this](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
+			// Without this adapter's members: it may be gone with its controller by now.
 			LSUtils::respondWithError(requestMessage, BT_ERR_UNPAIR_FAIL);
+			LSMessageUnref(requestMessage);	// was referenced above and leaked on failure
 			return;
 		}
 
