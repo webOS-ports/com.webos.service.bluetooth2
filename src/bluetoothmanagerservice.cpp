@@ -20,6 +20,7 @@
 #undef NDEBUG
 
 #include <iostream>
+#include <memory>
 #include <fstream>
 #include <regex>
 
@@ -804,27 +805,31 @@ BluetoothAdapter* BluetoothManagerService::getAdapter(const std::string &address
 bool BluetoothManagerService::setPairableState(const std::string &adapterAddress, bool value)
 {
 	BT_DEBUG("Setting pairable to %d", value);
-	bool retVal = false;
 
-	auto pairableCB = [this, &retVal, adapterAddress](BluetoothError error) {
-		if (error == BLUETOOTH_ERROR_NONE)
-		{
-			BT_DEBUG("Pairable value set in SIL with no errors");
-			findAdapterInfo(adapterAddress)->getPairState().setPairable(true);
-			notifySubscribersAboutStateChange();
-			retVal = true;
-		}
+	// The result is known on return only if the SIL calls back before setAdapterProperty() returns, which
+	// bluez5's does. Its API allows a later callback, so the flag lives on the heap rather than in this
+	// frame, which the callback used to write to by reference.
+	auto retVal = std::make_shared<bool>(false);
+
+	auto pairableCB = [this, retVal, adapterAddress, value](BluetoothError error) {
+		if (error != BLUETOOTH_ERROR_NONE)
+			return;
+
+		BT_DEBUG("Pairable value set in SIL with no errors");
+		BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+		if (adapterInfo)
+			adapterInfo->getPairState().setPairable(value);	// was always true, also when turning it off
+		notifySubscribersAboutStateChange();
+		*retVal = true;
 	};
-        if(findAdapterInfo(adapterAddress) && findAdapterInfo(adapterAddress)->getAdapter())
-        {
-	    findAdapterInfo(adapterAddress)->getAdapter()->setAdapterProperty(BluetoothProperty(BluetoothProperty::Type::PAIRABLE, value), pairableCB);
-        }
-        else
-        {
-            BT_DEBUG("Adapter not found for address: %s", adapterAddress.c_str());
-        }
 
-	return retVal;
+	BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+	if (adapterInfo && adapterInfo->getAdapter())
+		adapterInfo->getAdapter()->setAdapterProperty(BluetoothProperty(BluetoothProperty::Type::PAIRABLE, value), pairableCB);
+	else
+		BT_DEBUG("Adapter not found for address: %s", adapterAddress.c_str());
+
+	return *retVal;
 }
 
 #ifdef MULTI_SESSION_SUPPORT

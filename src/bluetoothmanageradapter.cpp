@@ -1753,6 +1753,11 @@ bool BluetoothManagerAdapter::awaitPairingRequests(LS::Message &request, pbnjson
 		responseObj.put("errorCode", (int32_t)BT_ERR_PAIRABLE_FAIL);
 		responseObj.put("errorText", retrieveErrorText(BT_ERR_PAIRABLE_FAIL));
 		LSUtils::postToClient(mIncomingPairingWatch->getMessage(), responseObj);
+
+		// The subscription failed: keeping its watch made every other caller get ALLOW_ONE_SUBSCRIBE until
+		// this client went away.
+		delete mIncomingPairingWatch;
+		mIncomingPairingWatch = nullptr;
 	}
 
 	return true;
