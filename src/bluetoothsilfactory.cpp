@@ -40,7 +40,7 @@ BluetoothSIL *BluetoothSILFactory::create(unsigned int version, BluetoothPairing
 		name = overrideSIL;
 	}
 
-	BT_DEBUG("name = %s,  overrideSIL =%s  \n", name.c_str(), overrideSIL);
+	BT_DEBUG("name = %s,  overrideSIL =%s  \n", name.c_str(), overrideSIL ? overrideSIL : "(none)");
 
 	std::string basePath = WEBOS_BLUETOOTH_SIL_BASE_PATH;
 
@@ -63,6 +63,7 @@ BluetoothSIL *BluetoothSILFactory::create(unsigned int version, BluetoothPairing
 	if (!SILHandle)
 	{
 		BT_CRITICAL(MSGID_SIL_DOESNT_EXIST, 0, "Failed to load SIL from path %s, err = %s", path, dlerror());
+		g_free(path);
 		return 0;
 	}
 
@@ -73,7 +74,10 @@ BluetoothSIL *BluetoothSILFactory::create(unsigned int version, BluetoothPairing
 	{
 		BT_CRITICAL(MSGID_SIL_WRONG_API, 0,
 		            "SIL module doesn't expose the required API");
+		// Cleared, or freeSILHandle() closes it a second time when the service exits.
 		dlclose(SILHandle);
+		SILHandle = nullptr;
+		g_free(path);
 		return 0;
 	}
 
@@ -83,6 +87,8 @@ BluetoothSIL *BluetoothSILFactory::create(unsigned int version, BluetoothPairing
 	{
 		BT_DEBUG("Failed to create SIL for API version %d", version);
 		dlclose(SILHandle);
+		SILHandle = nullptr;
+		g_free(path);
 		return 0;
 	}
 
@@ -98,4 +104,5 @@ void BluetoothSILFactory::freeSILHandle()
 
 	if (SILHandle)
 		dlclose(SILHandle);
+	SILHandle = nullptr;
 }

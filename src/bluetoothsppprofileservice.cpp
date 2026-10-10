@@ -782,7 +782,7 @@ void BluetoothSppProfileService::channelStateChanged(const std::string &adapterA
 			disableBinarySocket(userChannelId);
 
 		removeConnectWatchForDevice(userChannelId, true);
-		channelManager->markChannelAsNotConnected(channelId, getManager()->getAddress());
+		channelManager->markChannelAsNotConnected(channelId, adapterAddress);	// was the default adapter's address
 		if (!channelManager->isChannelConnected(address))
 			markDeviceAsNotConnected(adapterAddress, address);
 	}
