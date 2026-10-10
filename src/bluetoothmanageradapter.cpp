@@ -489,6 +489,14 @@ void BluetoothManagerAdapter::deviceFound(BluetoothPropertiesList properties)
 	BluetoothDevice *found = new BluetoothDevice(properties);
 	BT_DEBUG("Found a new device");
 
+	// Without an address it cannot be told apart, found or removed again: it stayed listed as an empty entry.
+	if (found->getAddress().empty())
+	{
+		BT_WARNING(MSGID_DEVICE_WITHOUT_ADDRESS, 0, "Device reported without an address, ignored");
+		delete found;
+		return;
+	}
+
 	// A device that is already known is updated: the insert used to fail, leaking the new object, and the
 	// notification reported the leaked copy instead of the stored one.
 	BluetoothDevice *device = findDevice(found->getAddress());
@@ -510,6 +518,12 @@ void BluetoothManagerAdapter::deviceFound(BluetoothPropertiesList properties)
 
 void BluetoothManagerAdapter::deviceFound(const std::string &address, BluetoothPropertiesList properties)
 {
+	if (address.empty())	// see deviceFound(properties)
+	{
+		BT_WARNING(MSGID_DEVICE_WITHOUT_ADDRESS, 0, "Device reported without an address, ignored");
+		return;
+	}
+
 	auto device = findDevice(address);
 	if (!device) {
 		// Assigned, not declared again: the inner declaration shadowed this one, and a new device was
