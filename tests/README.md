@@ -89,3 +89,11 @@ script as root with the service installed. It runs the unit tests, then sends th
 calls that crashed it before the hardening (`le/disableAdvertising` before any advertiser,
 `gatt/closeServer` with an id beyond 65535, a device list filtered by uuid) and checks that it answers
 each and keeps its pid, then watches its memory over 1200 `gatt/getStatus` calls.
+
+`phone-scenarios.py <phone address>` runs MAP and PBAP against a real, paired phone through bluez5: folders and
+messages, a session the phone ends (the link is dropped under it) and a new connect, the client's own disconnect
+ending its notification subscription, a subscriber whose leaving disconnects, and a phone book pull into the
+folder set, not one a refused change named. Android asks to allow message and contact access on first use; a
+refused or timed-out prompt shows as an OBEX connect that times out or is disconnected at once, until sharing is
+enabled in the phone's settings for this device. Nothing read from the phone is printed and pulled files are
+deleted.
