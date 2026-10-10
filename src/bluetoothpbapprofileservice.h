@@ -18,7 +18,9 @@
 #ifndef BLUETOOTHPBAPPROFILESERVICE_H
 #define BLUETOOTHPBAPPROFILESERVICE_H
 
+#include <map>
 #include <string>
+#include <utility>
 #include <bluetooth-sil-api.h>
 #include <luna-service2/lunaservice.hpp>
 #include <pbnjson.hpp>
@@ -101,12 +103,6 @@ private:
 	AccessRequest *findRequest(const std::string &requestIdStr);
 	uint64_t getAccessRequestId(const std::string &requestIdStr);
 
-	void setFolderObject(const std::string &object)
-	{ this->mFolderObject = object; }
-	std::string getFolderObject() const { return mFolderObject; }
-	void setFolderRepository(const std::string &repository)
-	{ this->mFolderRepository = repository; }
-	std::string getFolderRepository() const { return mFolderRepository; }
 	void initializePbapApplicationParameters();
 	std::string buildStorageDirPath(const std::string &path, const std::string &address);
 	bool parseGetPhoneBookParam(LS::Message &request, pbnjson::JValue &requestObj);
@@ -120,8 +116,8 @@ private:
 	uint64_t mRequestIndex;
 	uint32_t mNextRequestId;
 	LS::SubscriptionPoint mGetPropertiesSubscriptions;
-	std::string mFolderObject;
-	std::string mFolderRepository;
+	// Per device, the repository and object of its last successful setPhoneBook.
+	std::map<std::string, std::pair<std::string, std::string>> mPhoneBookFolders;
 	BluetoothPbapApplicationParameters pbapApplicationParameters;
 	std::map<std::string, LS::SubscriptionPoint*> mGetPhoneBookSubscriptions;
 };

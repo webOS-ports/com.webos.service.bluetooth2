@@ -133,6 +133,10 @@ bool BluetoothPbapProfileService::awaitAccessRequest(LSMessage &message)
 void BluetoothPbapProfileService::propertiesChanged(const std::string &adapterAddress, const std::string &address, BluetoothPropertiesList properties)
 {
 	BluetoothProfileService::propertiesChanged(adapterAddress, address, properties);
+
+	// A new session starts at the root of the phone book again.
+	if (!isDeviceConnected(adapterAddress, address))
+		mPhoneBookFolders.erase(convertToLower(address));
 }
 
 void BluetoothPbapProfileService::propertiesChanged(const std::string &address, BluetoothPropertiesList properties)
@@ -493,18 +497,20 @@ bool BluetoothPbapProfileService::setPhoneBook(LSMessage &message)
 		return true;
 	}
 
-	setFolderRepository(repository);
-	setFolderObject(object);
-
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
-	auto setPhoneBookCallback = [this, adapterAddress,address, requestMessage](BluetoothError error) {
+	auto setPhoneBookCallback = [this, adapterAddress, address, repository, object, requestMessage](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (BLUETOOTH_ERROR_NONE != error)
 			notifySetPhoneBookRequest(request, error, adapterAddress, address, false);
 		else
+		{
+			// Only once the device has changed folder, and only for that device: this was one folder for
+			// all devices, set before the request and kept when it failed.
+			mPhoneBookFolders[convertToLower(address)] = std::make_pair(repository, object);
 			notifySetPhoneBookRequest(request, error, adapterAddress, address, true);
+		}
 	};
 
 	getImpl<BluetoothPbapProfile>(adapterAddress)->setPhoneBook(address, repository, object, setPhoneBookCallback);
@@ -1261,9 +1267,13 @@ bool BluetoothPbapProfileService::pullPhoneBook(LSMessage &message)
 		LS::Message request(requestMessage);
 		if((subscribed)&&(BLUETOOTH_ERROR_NONE == error))
 		{
-			LS::SubscriptionPoint* subscriptionPoint = new LS::SubscriptionPoint;
-			mGetPhoneBookSubscriptions.insert({objectPath,subscriptionPoint});
-			subscriptionPoint->setServiceHandle(getManager());
+			// A transfer that already has subscribers gets one more; the insert used to fail and leak the new point.
+			LS::SubscriptionPoint *&subscriptionPoint = mGetPhoneBookSubscriptions[objectPath];
+			if (!subscriptionPoint)
+			{
+				subscriptionPoint = new LS::SubscriptionPoint;
+				subscriptionPoint->setServiceHandle(getManager());
+			}
 			subscriptionPoint->subscribe(request);
 		}
 
@@ -1430,10 +1440,16 @@ std::string BluetoothPbapProfileService::buildStorageDirPath(const std::string &
 	result += "/";
 	result += deviceFolder;
 	result += "/";
-	result += getFolderRepository();
-	result += "/";
-	result += getFolderObject();
-	result += "/";
+	auto folder = mPhoneBookFolders.find(convertToLower(address));
+	if (folder != mPhoneBookFolders.end())
+	{
+		result += folder->second.first;
+		result += "/";
+		result += folder->second.second;
+		result += "/";
+	}
+	else
+		result += "//";
 	if (g_mkdir_with_parents(result.c_str(), 0755) != 0)
 	{
 		BT_DEBUG("failed to create folder: %s", result.c_str());
