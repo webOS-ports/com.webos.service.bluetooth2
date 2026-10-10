@@ -21,6 +21,7 @@
 #include <memory>
 #include <string>
 #include <pbnjson.hpp>
+#include <PmLogLib.h>
 #include <luna-service2/lunaservice.hpp>
 #include "bluetootherrors.h"
 #include <vector>
@@ -163,7 +164,16 @@ inline void respondWithError(LS::Message &message, const std::string& errorText,
 	std::string payload;
 	generatePayload(responseObj, payload);
 
-	message.respond(payload.c_str());
+	// As in postToClient: respond() throws LS::Error when the reply cannot be sent (the client is gone), and
+	// this runs from SIL and LS2 callbacks, where nothing catches it and the service would end.
+	try
+	{
+		message.respond(payload.c_str());
+	}
+	catch (LS::Error &error)
+	{
+		PmLogError(PmLogGetLibContext(), "LS2_FAILED_TO_SEND", 0, "Failed to submit error response: %s", error.what());
+	}
 }
 
 inline void respondWithError(LSMessage *message, const std::string& errorText, unsigned int errorCode = -1)

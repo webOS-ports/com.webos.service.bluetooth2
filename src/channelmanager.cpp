@@ -87,6 +87,10 @@ ChannelManager::~ChannelManager()
 	mCreateChannelSubscriptons.clear();
 	mConnectingChannels.clear();
 
+	for (guint source : mPendingNotifications)
+		g_source_remove(source);
+	mPendingNotifications.clear();
+
 
 }
 
@@ -615,23 +619,24 @@ void ChannelManager::addReceiveQueue(const std::string &adapterAddress, const Bl
 		if (NULL == userData)
 			return FALSE;
 
+		// This source ends when the callback returns FALSE; its data is freed by the destroy notify.
 		ChannelManager *manager = userData->manager;
-		BluetoothSppChannelId channelId = userData->channelId;
-		std::string adapterAddress = userData->adapterAddress;
-		g_source_remove(userData->eventSourceId);
-		delete userData;
-
-		manager->notifyReceivedData(adapterAddress, channelId);
+		manager->mPendingNotifications.erase(userData->eventSourceId);
+		manager->notifyReceivedData(userData->adapterAddress, userData->channelId);
 
 		return FALSE;
 	};
 
+	// The manager keeps the ids of its pending notifications and removes them when it is deleted, so it can be
+	// deleted (an adapter going away) without one of them running on it afterwards.
 	DataReceivedInfo *userData = new DataReceivedInfo();
 	userData->channelId = channelId;
 	userData->manager = this;
 	userData->adapterAddress = adapterAddress;
-	guint eventSourceId = g_idle_add(dataReceivedCallback, (gpointer)userData);
+	guint eventSourceId = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, dataReceivedCallback, (gpointer)userData,
+	                                      [](gpointer data) { delete static_cast<DataReceivedInfo *>(data); });
 	userData->eventSourceId = eventSourceId;
+	mPendingNotifications.insert(eventSourceId);
 }
 
 void *ChannelManager::addReadDataSubscription(const std::string &channelId, const int timeout, LSUtils::ClientWatch *watch,

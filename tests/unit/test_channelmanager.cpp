@@ -143,3 +143,14 @@ TEST(ChannelManager, TwoDevicesOnTheSameUuidKeepTheirOwnChannels)
 	EXPECT_EQ(buffer->size, sizeof(other));
 	delete buffer;
 }
+
+TEST(ChannelManager, DeletedWithANotificationPending)
+{
+	// SPP reset() deletes the manager when its adapter goes; the idle notification for data received just
+	// before must not run on it afterwards.
+	auto *manager = new ChannelManager();
+	manager->markChannelAsConnected(21, "00:11:22:33:44:77", "uuid-c");
+	manager->addReceiveQueue("adapter", 21, payload, sizeof(payload));
+	delete manager;
+	pumpFor(20);
+}

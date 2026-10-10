@@ -74,7 +74,10 @@ void BluetoothSppProfileService::reset(const std::string &adapterAddress)
 	if (implIter == mChannelImpls.end())
 		return;
 
+	// Deleted now that it removes its pending notifications itself; it used to be leaked.
+	ChannelManager *channelManager = implIter->second;
 	mChannelImpls.erase(implIter);
+	delete channelManager;
 }
 
 void BluetoothSppProfileService::createChannelManager(const std::string &adapterAddress)
@@ -124,8 +127,10 @@ void BluetoothSppProfileService::handleConnectClientDisappeared(const std::strin
 	if (!mImpl)
 		return;
 
-	auto disconnectCallback = [this, adapterAddress, address, channelManager](BluetoothError /*error*/) {
-		if (!channelManager->isChannelConnected(address))
+	// The channel manager is looked up when the SIL answers: it goes with its adapter.
+	auto disconnectCallback = [this, adapterAddress, address](BluetoothError /*error*/) {
+		ChannelManager *channelManager = findChannelImpl(adapterAddress);
+		if (channelManager && !channelManager->isChannelConnected(address))
 			markDeviceAsNotConnected(adapterAddress, address);
 	};
 
@@ -157,8 +162,16 @@ void BluetoothSppProfileService::connectToStack(LS::Message &request, pbnjson::J
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto isConnectedCallback = [this, requestMessage, adapterAddress, address, uuid, channelManager](const BluetoothError error, const bool state) {
+	// The channel manager is looked up in each step: it goes with its adapter, which can go meanwhile.
+	auto isConnectedCallback = [this, requestMessage, adapterAddress, address, uuid](const BluetoothError error, const bool state) {
 		LS::Message request(requestMessage);
+		ChannelManager *channelManager = findChannelImpl(adapterAddress);
+		if (!channelManager)
+		{
+			LSUtils::respondWithError(request, BT_ERR_PROFILE_CONNECT_FAIL);
+			LSMessageUnref(request.get());
+			return;
+		}
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -177,9 +190,16 @@ void BluetoothSppProfileService::connectToStack(LS::Message &request, pbnjson::J
 		channelManager->markChannelAsConnecting(uuid);
 		notifyStatusSubscribers(adapterAddress, address, uuid, channelManager->isChannelConnected(address));
 
-		auto connectCallback = [this, requestMessage, adapterAddress, address, uuid, channelManager](const BluetoothError error, const BluetoothSppChannelId channelId) {
+		auto connectCallback = [this, requestMessage, adapterAddress, address, uuid](const BluetoothError error, const BluetoothSppChannelId channelId) {
 			LS::Message request(requestMessage);
 			bool subscribed = false;
+			ChannelManager *channelManager = findChannelImpl(adapterAddress);
+			if (!channelManager)
+			{
+				LSUtils::respondWithError(request, BT_ERR_PROFILE_CONNECT_FAIL);
+				LSMessageUnref(request.get());
+				return;
+			}
 
 			if (error != BLUETOOTH_ERROR_NONE)
 			{

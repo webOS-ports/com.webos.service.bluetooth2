@@ -21,6 +21,7 @@
 #include <string>
 #include <unordered_map>
 #include <map>
+#include <set>
 #include <mutex>
 
 #include <pbnjson.hpp>
@@ -122,6 +123,7 @@ private:
 	std::vector<ReadDataInfo *> mReadDataSubscriptions;
 	std::vector<std::string> mConnectingChannels;
 	std::mutex cmMutex;
+	std::set<guint> mPendingNotifications;
 
 	void postToReadDataSubscriber(const uint8_t *data, const uint32_t size, const LSUtils::ClientWatch *watch,
 	        const std::string &adapterAddress, const std::string &channelId);
