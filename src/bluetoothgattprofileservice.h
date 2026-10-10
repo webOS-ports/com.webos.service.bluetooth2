@@ -523,6 +523,8 @@ private:
 	pbnjson::JValue buildCharacteristics(bool localAdapterServices, const BluetoothGattCharacteristicList &characteristicsList);
 	void notifyGetServicesSubscribers(bool localAdapterChanged, const std::string &adapterAddress, const std::string &deviceAddress, BluetoothGattServiceList serviceList);
 	bool parseValue(pbnjson::JValue valueObj, BluetoothGattValue *value);
+	void releaseCharacteristicWatch(const std::string &adapterAddress, const std::string &deviceAddress, uint16_t handle,
+	                                const BluetoothUuid &serviceUuid, const BluetoothUuid &characteristicUuid);
 	void handleMonitorCharacteristicClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);
 	void handleMonitorCharacteristicsClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);
 	bool isDescriptorValid(const std::string &address, const uint16_t &handle, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
