@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <string>
 #include <functional>
+#include <vector>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <string.h>
@@ -57,21 +58,24 @@ private:
 	char mSocketFileName[BINARY_SOCKET_FILE_NAME_SIZE];
 	char mBufferData[DATA_BUFFER_SIZE];
 	uint32_t mBufferSize;
-	const uint8_t *mRetryData;
-	uint32_t mRetryDataSize;
-	uint32_t mRetryTimeout;
+	// Data not yet written to the client, in order. A copy: what sendData() gets is only valid for the call.
+	std::vector<uint8_t> mRetryData;
+	guint mRetryTimeout;
 	uint32_t mRetryCount;
 	int mServerSocketFd;
 	int mClientSocketFd;
 	bool mWriting;
 	GIOChannel *mServerIoChannel;
 	GIOChannel *mClientIoChannel;
+	guint mServerWatch;
+	guint mClientWatch;
 	BluetoothBinarySocketReceiveCallback mCallback;
 
 private:
 	void retrySendData(const uint8_t *data, const uint32_t size);
 	void storeSendDataToBuffer(const uint8_t *data, const uint32_t size);
 	void sendBufferData();
+	void closeClient();
 
 private:
 	static gboolean getAcceptRequest(GIOChannel *io, GIOCondition cond, gpointer userData);

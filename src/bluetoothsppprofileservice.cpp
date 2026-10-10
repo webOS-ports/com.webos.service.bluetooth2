@@ -822,10 +822,12 @@ BluetoothBinarySocket* BluetoothSppProfileService::findBinarySocket(const std::s
 
 void BluetoothSppProfileService::enableBinarySocket(const std::string &adapterAddress, const std::string &channelId)
 {
+	// A socket left for this channel would leak, its insert below failing.
+	disableBinarySocket(channelId);
+
 	bool created = false;
 	BluetoothBinarySocket *binarySocket = new BluetoothBinarySocket();
-	if (binarySocket)
-		created = binarySocket->createBinarySocket(channelId);
+	created = binarySocket->createBinarySocket(channelId);
 
 	if (created)
 	{
@@ -895,13 +897,16 @@ void BluetoothSppProfileService::sendDataToStack(const std::string &channelId, c
 		return;
 	}
 
-	auto writeDataCallback = [binarySocket](BluetoothError error) {
+	// Look the socket up again: the channel can be disconnected, and the socket deleted, before the SIL
+	// answers. The flag is cleared on an error too; it used to stay set, and the socket's read watch then
+	// returned without reading on every wakeup, spinning the main loop for good.
+	auto writeDataCallback = [this, channelId](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
-		{
 			BT_DEBUG("Failed to write the binary socket data to stack");
-			return;
-		}
-		binarySocket->setWriting(false);
+
+		auto socket = findBinarySocket(channelId);
+		if (socket)
+			socket->setWriting(false);
 	};
 
 	binarySocket->setWriting(true);
