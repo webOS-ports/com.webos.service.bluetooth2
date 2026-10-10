@@ -794,6 +794,26 @@ void BluetoothManagerAdapter::handleDeviceStatePropertiesSet(BluetoothProperties
 	LSUtils::postToClient(request, responseObj);
 }
 
+// Removes the getFilteringDeviceStatus subscription of an application; with \p only, just when it is still
+// that watch (a newer subscription may have replaced it). \p clearFilters also drops the application's filters.
+void BluetoothManagerAdapter::removeFilteringDeviceWatch(const std::string &appName, LSUtils::ClientWatch *only,
+                                                         bool clearFilters)
+{
+	auto watchIter = mGetDevicesWatches.find(appName);
+	if (watchIter != mGetDevicesWatches.end() && (!only || watchIter->second == only))
+	{
+		LSUtils::ClientWatch *watch = watchIter->second;
+		mGetDevicesWatches.erase(watchIter);
+		delete watch;
+	}
+
+	if (clearFilters)
+	{
+		mFilterClassOfDevices.erase(appName);
+		mFilterUuids.erase(appName);
+	}
+}
+
 void BluetoothManagerAdapter::appendFilteringDevices(std::string senderName, pbnjson::JValue &object)
 {
 	pbnjson::JValue devicesObj = pbnjson::Array();
@@ -808,17 +828,16 @@ void BluetoothManagerAdapter::appendFilteringDevices(std::string senderName, pbn
 			if((((int32_t)(filterClassOfDevices->second) & (int32_t)(device->getClassOfDevice())) != (int32_t)(filterClassOfDevices->second)))
 				continue;
 
-		if(device->getTypeAsString() == "bredr")
+		// Like the class of device, a uuid filter keeps the devices that match it. The search used to run
+		// from begin() of one copy of the uuid list to end() of another, and to skip the matching devices.
+		if (device->getTypeAsString() == "bredr")
 		{
-			if(mFilterUuids.size() > 0)
+			auto filterUuid = mFilterUuids.find(senderName);
+			if (filterUuid != mFilterUuids.end() && !filterUuid->second.empty())
 			{
-				auto filterUuid = mFilterUuids.find(senderName);
-				if(filterUuid->second.c_str() != NULL)
-				{
-					auto uuidIter = std::find(device->getUuids().begin(), device->getUuids().end(), filterUuid->second);
-					if (filterUuid != mFilterUuids.end() && uuidIter != device->getUuids().end())
-						continue;
-				}
+				const std::vector<std::string> uuids = device->getUuids();
+				if (std::find(uuids.begin(), uuids.end(), filterUuid->second) == uuids.end())
+					continue;
 			}
 		}
 
@@ -1231,22 +1250,8 @@ bool BluetoothManagerAdapter::cancelDiscovery(LS::Message &request)
 		LSUtils::postToClient(requestMessage, responseObj);
 	}
 
-	const char* senderName = LSMessageGetApplicationID(requestMessage);
-	if( senderName == NULL )
-	{
-		senderName = LSMessageGetSenderServiceName(requestMessage);
-	}
-
-	if(senderName != NULL)
-	{
-		auto watchIter = mGetDevicesWatches.find(senderName);
-		if (watchIter == mGetDevicesWatches.end())
-			return;
-
-		LSUtils::ClientWatch *watch = watchIter->second;
-		mGetDevicesWatches.erase(watchIter);
-		delete watch;
-	}
+	removeFilteringDeviceWatch(mBluetoothManagerService->getMessageOwner(requestMessage));
+	LSMessageUnref(requestMessage);
 	});
 
 	return true;
@@ -1291,17 +1296,6 @@ bool BluetoothManagerAdapter::getFilteringDeviceStatus(LS::Message &request, pbn
 		return true;
     }
 
-	const char* senderName = LSMessageGetApplicationID(request.get());
-	if(senderName == NULL)
-	{
-		senderName = LSMessageGetSenderServiceName(request.get());
-		if(senderName == NULL)
-		{
-			LSUtils::respondWithError(request, BT_ERR_START_DISC_FAIL);
-			return true;
-		}
-	}
-
 	if (requestObj.hasKey("classOfDevice"))
 	{
 		if(mFilterClassOfDevices.find(appName) != mFilterClassOfDevices.end())
@@ -1335,16 +1329,18 @@ bool BluetoothManagerAdapter::getFilteringDeviceStatus(LS::Message &request, pbn
 	pbnjson::JValue responseObj = pbnjson::Object();
 	if (request.isSubscription())
 	{
+		// One subscription per application: a new one replaces the previous watch, and a watch takes its
+		// entry and the application's filters with it when its client goes away. Watches and filters are
+		// keyed by the same owner name; the filters used to be looked up by the untrimmed application id.
+		removeFilteringDeviceWatch(appName);
 		LSUtils::ClientWatch *watch = new LSUtils::ClientWatch(mBluetoothManagerService->get(), request.get(), nullptr);
-		if(mGetDevicesWatches.find(senderName) != mGetDevicesWatches.end())
-			mGetDevicesWatches[senderName] = watch;
-		else
-			mGetDevicesWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(senderName, watch));
+		watch->setCallback([this, appName, watch]() { removeFilteringDeviceWatch(appName, watch, true); });
+		mGetDevicesWatches[appName] = watch;
 
 		subscribed = true;
 	}
 
-	appendFilteringDevices(senderName, responseObj);
+	appendFilteringDevices(appName, responseObj);
 
 	responseObj.put("returnValue", true);
 	responseObj.put("subscribed", subscribed);

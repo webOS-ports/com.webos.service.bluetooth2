@@ -136,6 +136,8 @@ public:
 	void updateSupportedServiceClasses(const std::vector<std::string> uuids);
 
 	void appendFilteringDevices(std::string senderName, pbnjson::JValue &object);
+	void removeFilteringDeviceWatch(const std::string &appName, LSUtils::ClientWatch *only = nullptr,
+	                                bool clearFilters = false);
 	void appendConnectedDevices(pbnjson::JValue &object);
 	void appendPairedDevices(pbnjson::JValue &object);
 	void appendDiscoveredDevice(pbnjson::JValue &object, BluetoothDevice *device);
