@@ -99,16 +99,10 @@ void BluetoothMapProfileService::propertiesChanged(const std::string &adapterAdd
 		}
 	}
 
-	if(!connected)
-	{
-		auto watchesIter = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
-		if (watchesIter == mConnectWatchesForMultipleAdaptersWithSessionKey.end())
-			return;
-		auto watchIter = (watchesIter->second).find(sessionKey);
-		if (watchIter == (watchesIter->second).end())
-			return;
+	// A session that ends is cleaned up whether or not it was connected with a subscription; without one it
+	// used to stay marked connected, and every later connect was refused as already connected.
+	if (!connected && !getSessionId(adapterAddress, sessionKey).empty())
 		handleDeviceClientDisappeared(adapterAddress, sessionKey);
-	}
 
 }
 
@@ -317,6 +311,7 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 		return true;
 	}
 
+	LSUtils::ClientWatch *newWatch = nullptr;
 	if (request.isSubscription())
 	{
 		auto watchesIter = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
@@ -325,6 +320,7 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			std::map<std::string, LSUtils::ClientWatch*> connectWatches;
 			auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 								std::bind(&BluetoothMapProfileService::handleConnectClientDisappeared, this, adapterAddress, sessionKey));
+			newWatch = watch;
 
 			connectWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(sessionKey, watch));
 			mConnectWatchesForMultipleAdaptersWithSessionKey.insert(std::pair<std::string, std::map<std::string, LSUtils::ClientWatch*>>(adapterAddress, connectWatches));
@@ -334,9 +330,9 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			auto watchIter = (watchesIter->second).find(sessionKey);
 			if (watchIter == (watchesIter->second).end())
 			{
-				std::map<std::string, LSUtils::ClientWatch*> connectWatches;
 				auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 									std::bind(&BluetoothMapProfileService::handleConnectClientDisappeared, this, adapterAddress, sessionKey));
+				newWatch = watch;
 				(watchesIter->second).insert(std::pair<std::string, LSUtils::ClientWatch*>(sessionKey, watch));
 			}
 		}
@@ -355,6 +351,19 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			markDeviceAsNotConnecting(adapterAddress, sessionKey);
 			notifyGetStatusSubscribers(adapterAddress, sessionKey);
 			LSUtils::respondWithError(request, error);
+
+			// The subscription's watch went with the failed connect. It used to stay: the client's later
+			// connects got no watch of their own, and its leaving disconnected nothing.
+			auto watches = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
+			if (newWatch && watches != mConnectWatchesForMultipleAdaptersWithSessionKey.end())
+			{
+				auto entry = watches->second.find(sessionKey);
+				if (entry != watches->second.end() && entry->second == newWatch)
+				{
+					watches->second.erase(entry);
+					delete newWatch;
+				}
+			}
 			LSMessageUnref(request.get());
 		}
 		else
@@ -575,6 +584,8 @@ bool BluetoothMapProfileService::disconnect(LSMessage &message)
 		responseObj.put("instanceName", instanceName);
 		responseObj.put("sessionId", sessionId);
 		LSUtils::postToClient(request, responseObj);
+		// Ends the session's message notification subscription; it used to stay, with its subscription point.
+		handleMessageNotificationClientDisappeared(adapterAddress, sessionKey);
 		removeDeviceAsConnectedWithSessionKey(adapterAddress, sessionKey);
 		markDeviceAsNotConnected(adapterAddress, sessionKey);
 		markDeviceAsNotConnecting(adapterAddress, sessionKey);
