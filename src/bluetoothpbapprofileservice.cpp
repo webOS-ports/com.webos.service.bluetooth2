@@ -59,6 +59,9 @@ BluetoothPbapProfileService::BluetoothPbapProfileService(BluetoothManagerService
 
 BluetoothPbapProfileService::~BluetoothPbapProfileService()
 {
+	// Pulls still under way have their subscription points here until the transfer ends.
+	for (auto &subscription : mGetPhoneBookSubscriptions)
+		delete subscription.second;
 }
 
 void BluetoothPbapProfileService::initialize()

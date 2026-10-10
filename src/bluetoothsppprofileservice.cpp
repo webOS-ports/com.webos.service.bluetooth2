@@ -43,6 +43,8 @@ BluetoothSppProfileService::BluetoothSppProfileService(BluetoothManagerService *
 
 BluetoothSppProfileService::~BluetoothSppProfileService()
 {
+	for (auto &channels : mChannelImpls)
+		delete channels.second;
 }
 
 void BluetoothSppProfileService::initialize()

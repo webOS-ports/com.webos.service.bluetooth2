@@ -194,11 +194,22 @@ BluetoothManagerService::~BluetoothManagerService()
 {
 	BT_DEBUG("Shutting down bluetooth manager service ...");
 
-	if (mSil)
-		delete mSil;
+	// The profiles and adapters were never deleted, so LeakSanitizer reported all of them at every exit and
+	// real leaks were lost among them. ANCS first, as it observes the GATT profile; the profiles in reverse
+	// order of creation; then the adapters; the SIL last, as they all hold pointers into it.
+	delete mGattAnsc;
+	mGattAnsc = nullptr;
 
-	if (mGattAnsc)
-		delete mGattAnsc;
+	for (auto profile = mProfiles.rbegin(); profile != mProfiles.rend(); ++profile)
+		delete *profile;
+	mProfiles.clear();
+
+	for (auto &adapter : mAdaptersInfo)
+		delete adapter.second;
+	mAdaptersInfo.clear();
+
+	delete mSil;
+	mSil = nullptr;
 
 	BluetoothSILFactory::freeSILHandle();
 }

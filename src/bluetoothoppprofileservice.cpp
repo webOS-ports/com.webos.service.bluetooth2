@@ -60,6 +60,8 @@ BluetoothOppProfileService::BluetoothOppProfileService(BluetoothManagerService *
 
 BluetoothOppProfileService::~BluetoothOppProfileService()
 {
+	for (auto &subscription : mMonitorTransferSubscriptions)
+		delete subscription.second;
 }
 
 void BluetoothOppProfileService::initialize()
