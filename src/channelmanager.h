@@ -98,8 +98,11 @@ private:
 		std::queue<QueueData *> receiveQueue;
 	} ChannelInfo;
 
+	// Owns its watch and its timeout source: destroyReadDataInfo() ends all three. Both used to outlive
+	// it, and a later watch callback or timeout then deleted whatever entry had reused its address.
 	typedef struct {
 		int32_t timeout;
+		guint timeoutSource;
 		LSUtils::ClientWatch *watch;
 		BluetoothSppChannelId stackChannelId;
 		std::string userChannelId;
@@ -123,6 +126,7 @@ private:
 	ChannelInfo *getChannelInfo(const std::string &uuid);
 	ChannelInfo *getChannelInfo(const BluetoothSppChannelId channelId);
 	void makeDataBuffer(ChannelInfo *channelInfo);
+	void destroyReadDataInfo(ReadDataInfo *dataInfo);
 };
 
 #endif // CHANNELMANAGER_H
