@@ -24,6 +24,8 @@
 #include "logging.h"
 #include "utils.h"
 
+#include <charconv>
+
 using namespace std::placeholders;
 
 BluetoothGattProfileService::BluetoothGattProfileService(BluetoothManagerService *manager) :
@@ -57,24 +59,26 @@ BluetoothGattProfileService::BluetoothGattProfileService(BluetoothManagerService
 
 bool validateClientId(const std::string input)
 {
-	for(int i=0; i < input.size(); i++)
+	for (char c : input)
 	{
-		if(input[i] < '0' || input[i] > '9')
+		if (c < '0' || c > '9')
 			return false;
 	}
 	return true;
 }
 
+// 0 for anything that is not a decimal number up to 65535. std::stoi threw on a long string of digits, which
+// nothing catches on the way from a Luna call, and values above 65535 were truncated.
 uint16_t idToInt(const std::string input)
 {
-	if(input.empty())
+	if (input.empty() || !validateClientId(input))
 		return 0;
 
-	if(!validateClientId(input))
+	uint16_t id = 0;
+	auto [end, ec] = std::from_chars(input.data(), input.data() + input.size(), id);
+	if (ec != std::errc() || end != input.data() + input.size())
 		return 0;
-	
-	std::string::size_type sz;   // alias of size_t
-	return (uint16_t)(std::stoi(input,&sz));
+	return id;
 }
 
 std::string idToString(const uint16_t input)
