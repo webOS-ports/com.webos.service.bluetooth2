@@ -1320,7 +1320,8 @@ bool BluetoothAvrcpProfileService::getRemoteVolume(LSMessage &message)
 		pbnjson::JValue connectedDeviceResponseObj = pbnjson::Object();
 
 		auto adapterInfo = getManager()->findAdapterInfo(adapterAddress);
-		for (auto deviceIter : adapterInfo->getDevices())
+		auto devices = adapterInfo ? adapterInfo->getDevices() : std::unordered_map<std::string, BluetoothDevice*>();
+		for (auto deviceIter : devices)
 		{
 			auto device = deviceIter.second;
 
@@ -1331,7 +1332,10 @@ bool BluetoothAvrcpProfileService::getRemoteVolume(LSMessage &message)
 				connectedDeviceResponseObj.put("subscribed", subscribed);
 				connectedDeviceResponseObj.put("adapterAddress", adapterAddress);
 				connectedDeviceResponseObj.put("address", device->getAddress());
-				connectedDeviceResponseObj.put("volume", mRemoteVolumes[device->getAddress()]);
+				// find(), not operator[]: that stored a volume of 0 for every device asked about.
+				auto volume = mRemoteVolumes.find(device->getAddress());
+				if (volume != mRemoteVolumes.end())
+					connectedDeviceResponseObj.put("volume", volume->second);
 				LSUtils::postToClient(request, connectedDeviceResponseObj);
 				isAnyDeviceConnected = true;
 			}
@@ -1341,6 +1345,11 @@ bool BluetoothAvrcpProfileService::getRemoteVolume(LSMessage &message)
 		if (!isAnyDeviceConnected)
 		{
 			BT_DEBUG("AVRCP: There is no AVRCP connected device : [%s : %d]", __FUNCTION__, __LINE__);
+			// The call failed, so its subscription ends: the watch used to stay, and later volume changes were
+			// posted as returnValue:true to a call that had been answered with an error.
+			if (subscribed && !mGetConnectedDevicesRemoteVolumeWatchesForMultipleAdapters.empty())
+				removeClientWatch(&mGetConnectedDevicesRemoteVolumeWatchesForMultipleAdapters,
+				                  mGetConnectedDevicesRemoteVolumeWatchesForMultipleAdapters.back());
 			LSUtils::respondWithError(request, BT_ERR_AVRCP_NO_CONNECTED_DEVICES);
 			return true;
 		}
@@ -2292,6 +2301,14 @@ void BluetoothAvrcpProfileService::createMediaRequest(
 
 	assignRequestId(request);
 
+	// Ids wrap at 999 and unanswered requests were never dropped, so a new request could share its id with a
+	// stale one, which every lookup found first. The stale one goes.
+	if (findMediaRequest(metaData, request->requestId, adapterAddress))
+	{
+		deleteMediaRequestId(metaData, request->requestId, adapterAddress);
+		deleteMediaRequest(metaData, request->requestId, adapterAddress);
+	}
+
     std::map<std::string, MediaRequest*> mediaRequest;
 	mediaRequest.insert(std::pair<std::string, MediaRequest*> (adapterAddress, request));
 	std::map<std::string, BluetoothAvrcpRequestId> mediaRequestId;
@@ -2342,6 +2359,13 @@ void BluetoothAvrcpProfileService::createMediaRequest(bool metaData, uint64_t re
 
 	assignRequestId(request);
 
+	// As above: a stale request holding the same id goes.
+	if (findMediaRequest(metaData, request->requestId))
+	{
+		deleteMediaRequestId(metaData, request->requestId);
+		deleteMediaRequest(metaData, request->requestId);
+	}
+
 	if (metaData)
 	{
 		mMediaMetaDataRequests.insert(std::pair<uint64_t, MediaRequest*>(mRequestIndex, request));
@@ -2367,7 +2391,11 @@ void BluetoothAvrcpProfileService::createMediaRequest(bool metaData, uint64_t re
 }
 
 void BluetoothAvrcpProfileService::deleteMediaRequestId(bool metaData, const std::string &requestIdStr)
-{
+{	// getRequestIndex() answers 0, a valid index, for a request it does not know.
+	if (!findMediaRequest(metaData, requestIdStr))
+		return;
+
+
 	uint64_t requestIndex = getRequestIndex(metaData, requestIdStr);
 	if (metaData)
 	{
