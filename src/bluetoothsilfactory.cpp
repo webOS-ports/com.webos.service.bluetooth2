@@ -25,7 +25,9 @@
 #include "bluetoothsilfactory.h"
 #include "utils.h"
 
-typedef BluetoothSIL *(*CreateSILFunc)(unsigned int version, BluetoothPairingIOCapability capability);
+// The type of the entry point the SIL API declares. It was declared here with an unsigned version, and calling a
+// function through a pointer of another type is undefined behaviour (UBSan stops at it).
+typedef decltype(&createBluetoothSIL) CreateSILFunc;
 
 void *BluetoothSILFactory::SILHandle = nullptr;
 
