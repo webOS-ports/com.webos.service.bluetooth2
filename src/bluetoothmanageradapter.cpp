@@ -771,22 +771,22 @@ bool BluetoothManagerAdapter::setState(LS::Message &request, pbnjson::JValue &re
 	{
 		bool powered = requestObj["powered"].asBool();
 
-		if(powered != mPowered)
+		// Passed on even when the state already matches: while the SIL power-cycles a new controller it is briefly
+		// off, and a client's "off" in that moment must still reach the SIL, or the cycle switches it on again. The
+		// SIL does nothing when there is nothing to change.
+		BluetoothError error;
+
+		BT_INFO("Manager", 0, "%s = powered :%d", mAddress.c_str(), powered );
+
+		if (powered)
+			error = mAdapter->enable();
+		else
+			error = mAdapter->disable();
+
+		if (error != BLUETOOTH_ERROR_NONE)
 		{
-			BluetoothError error;
-
-            BT_INFO("Manager", 0, "%s = powered :%d", mAddress.c_str(), powered );
-
-			if (powered)
-				error = mAdapter->enable();
-			else
-				error = mAdapter->disable();
-
-			if (error != BLUETOOTH_ERROR_NONE)
-			{
-				LSUtils::respondWithError(request, BT_ERR_POWER_STATE_CHANGE_FAIL);
-				return true;
-			}
+			LSUtils::respondWithError(request, BT_ERR_POWER_STATE_CHANGE_FAIL);
+			return true;
 		}
 	}
 
