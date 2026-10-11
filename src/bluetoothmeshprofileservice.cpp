@@ -807,11 +807,29 @@ void BluetoothMeshProfileService::createNetworkResult(BluetoothError error, cons
 		networkFailed(error, adapterAddress);
 }
 
+// MESH_NODE_NOT_AVAILABLE: the stack knows no node for the stored token (meshd lost its storage, or the network
+// was made on another device), so the network is gone for good. Its records are dropped, and the next createNetwork
+// makes a new one: before, the token stayed in the database, every createNetwork answered NETWORK_EXISTS and tried
+// the same failing attach, and nothing could remove it. Any other failure (the stack not running, no answer, busy)
+// may pass, and keeps the network.
+// An attach that worked makes the network usable, also one the SIL made by itself when the stack came back after a
+// createNetwork had found it not running: until then every call was refused as NETWORK_NOT_CREATED, and the next
+// createNetwork's attach was refused by the stack (the node is in use) and counted as a failure.
 void BluetoothMeshProfileService::attachResult(BluetoothError error, const std::string &adapterAddress)
 {
 	BT_INFO("MESH", 0, "[%s : %d], error: %d", __FUNCTION__, __LINE__, error);
-	if (BLUETOOTH_ERROR_NONE != error)
-		networkFailed(error, adapterAddress);
+	if (BLUETOOTH_ERROR_NONE == error)
+	{
+		mNetworkCreated = true;
+		return;
+	}
+	if (BLUETOOTH_ERROR_MESH_NODE_NOT_AVAILABLE == error)
+	{
+		BT_ERROR("MESH", 0, "the stored mesh network is unknown to the stack: dropping it");
+		if (!LSUtils::callDb8MeshDeleteNetwork(getManager()))
+			BT_ERROR("MESH", 0, "could not drop the stored mesh network");
+	}
+	networkFailed(error, adapterAddress);
 }
 
 bool BluetoothMeshProfileService::provision(LSMessage &message)

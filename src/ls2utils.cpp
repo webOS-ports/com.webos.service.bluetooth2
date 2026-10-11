@@ -158,6 +158,32 @@ bool LSUtils::callDb8MeshSetToken(LS::Handle *serviceHandle, std::string &token)
 	return true;
 }
 
+// The stored network: its token, AppKeys and nodes, for a network meshd no longer knows. All three kinds are tried;
+// false when any of them could not be deleted.
+bool LSUtils::callDb8MeshDeleteNetwork(LS::Handle *serviceHandle)
+{
+	bool deleted = true;
+	for (const char *kind : {"com.webos.service.bluetooth2.meshtoken:1", "com.webos.service.bluetooth2.meshappkey:1",
+							 "com.webos.service.bluetooth2.meshnodeinfo:1"})
+	{
+		pbnjson::JValue query = pbnjson::Object();
+		query.put("from", kind);
+		pbnjson::JValue reqObj = pbnjson::Object();
+		reqObj.put("query", query);
+		auto reply = serviceHandle->callOneReply("luna://com.webos.service.db/del", reqObj.stringify().c_str()).get();
+
+		pbnjson::JValue replyObj = pbnjson::Object();
+		LSUtils::parsePayload(reply.getPayload(), replyObj);
+		if (!replyObj["returnValue"].asBool())
+		{
+			BT_ERROR("MESH", 0, "Db8 del of %s failed: %d==%s", kind, replyObj["errorCode"].asNumber<int32_t>(),
+					 replyObj["errorText"].asString().c_str());
+			deleted = false;
+		}
+	}
+	return deleted;
+}
+
 bool LSUtils::callDb8MeshPutAppKey(LS::Handle *serviceHandle, uint16_t appKeyInex,
 									const std::string &appName)
 {
