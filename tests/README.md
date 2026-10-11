@@ -56,7 +56,8 @@ Every call the service makes into the SIL is logged for the test to check.
 `run-scenarios.py` covers what can only go wrong with a device: a MAP session the phone ends after a connect
 without subscription, a subscribed connect that fails, a client's own disconnect and its notification
 subscription, PBAP folders per device and on success only, two subscribers to one phone book pull, mesh requests
-that are refused, and an OPP state change for a transfer that is not ours. Each scenario restarts the service on a
+that are refused, a stored mesh network the stack no longer knows (dropped on that error only), and an OPP state
+change for a transfer that is not ours. Each scenario restarts the service on a
 fresh fake. Run on the service before these fixes, every scenario fails.
 
 On a qemux86-64 LuneOS image (as root):

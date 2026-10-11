@@ -317,6 +317,59 @@ def mesh_rejected_requests_leave_no_watch():
     check(not late_network, 'the refused createNetwork still got the network id: %r' % late_network)
 
 
+def mesh_lost_network_is_dropped_on_not_found_only():
+    """The stored network's attach fails: when the stack knows no node for the token (MESH_NODE_NOT_AVAILABLE,
+    meshd's NotFound) the network is dropped and createNetwork makes a new one; any other failure keeps it, and
+    createNetwork attaches to it again. Before, nothing dropped it: createNetwork answered NETWORK_EXISTS for good."""
+    created = Client('mesh/createNetwork', {})
+    settle()
+    ctl('mesh.networkid 1234')	# stored in DB8
+    settle(0.5)
+    created.stop()
+    ctl('mesh.attachresult 1')	# the service no longer takes the network for attached
+    settle(0.5)
+
+    def try_create():
+        """createNetwork with a stored network: an attach to it, no new network, NETWORK_EXISTS."""
+        before = len(calls())
+        replies = [call('mesh/createNetwork', {})]
+        settle(0.3)
+        new = calls()[before:]
+        check(any(c.startswith('mesh.attach ') and c.endswith(' 1234') for c in new)
+              and not any(c.startswith('mesh.createNetwork') for c in new),
+              'createNetwork with a stored network made these calls: %r' % new)
+        check(replies[0] and replies[0].get('errorCode') == 39, 'createNetwork with a stored network: %r' % replies)
+
+    for error in (1, 4, 17, 41):	# FAIL, BUSY, NOT_ALLOWED, MESH_TIMEOUT: the network is kept
+        try_create()
+        ctl('mesh.attachresult %d' % error)
+        settle(0.5)
+    # An attach that worked (the SIL attaches by itself when meshd comes back): the network is usable, and
+    # createNetwork does not attach again.
+    ctl('mesh.attachresult 0')
+    settle(0.5)
+    before = len(calls())
+    reply = call('mesh/createNetwork', {})
+    settle(0.3)
+    check(reply and reply.get('errorCode') == 39 and not any(c.startswith('mesh.') for c in calls()[before:]),
+          'createNetwork on an attached network: %r, calls %r' % (reply, calls()[before:]))
+    ctl('mesh.attachresult 1')
+    settle(0.5)
+    try_create()
+    ctl('mesh.attachresult 36')	# MESH_NODE_NOT_AVAILABLE: dropped
+    settle(0.5)
+    before = len(calls())
+    fresh = Client('mesh/createNetwork', {})
+    settle(0.5)
+    new = calls()[before:]
+    ctl('mesh.networkid 5678')
+    replies = fresh.wait(1, 3)
+    fresh.stop()
+    check(any(c.startswith('mesh.createNetwork') for c in new) and not any(c.startswith('mesh.attach') for c in new),
+          'createNetwork after the drop made these calls: %r' % new)
+    check(any(r.get('networkId') == '5678' for r in replies), 'createNetwork after the drop: %r' % replies)
+
+
 def opp_unknown_transfer_touches_no_request():
     """E12: a state change for a transfer that is not ours does not finish the first request."""
     monitor = Client('opp/monitorTransfer', {'subscribe': True})
@@ -350,6 +403,7 @@ SCENARIOS = [
     pbap_folder_is_per_device_and_set_on_success,
     pbap_second_subscriber_to_a_pull_is_told,
     mesh_rejected_requests_leave_no_watch,
+    mesh_lost_network_is_dropped_on_not_found_only,
     opp_unknown_transfer_touches_no_request,
 ]
 

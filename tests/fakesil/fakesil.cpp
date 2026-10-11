@@ -328,6 +328,7 @@ public:
 
 	void onOffResult(bool state) { getMeshObserver()->modelSetOnOffResult(ADAPTER_ADDRESS, state, BLUETOOTH_ERROR_NONE); }
 	void networkId(uint64_t id) { getMeshObserver()->updateNetworkId(ADAPTER_ADDRESS, id); }
+	void attachResult(int error) { getMeshObserver()->attachResult(static_cast<BluetoothError>(error), ADAPTER_ADDRESS); }
 };
 
 class FakeAdapter : public BluetoothAdapter
@@ -589,6 +590,12 @@ private:
 			uint64_t id = 0;
 			in >> id;
 			mAdapter.mMesh.networkId(id);
+		}
+		else if (command == "mesh.attachresult")
+		{
+			int error = 0;
+			in >> error;
+			mAdapter.mMesh.attachResult(error);
 		}
 		else
 			return "unknown command";
