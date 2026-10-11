@@ -16,6 +16,7 @@
 
 
 #include "bluetoothavrcpprofileservice.h"
+#include "avrcpbrowse.h"
 
 #include <algorithm>
 #include "bluetoothmanagerservice.h"
@@ -3290,6 +3291,32 @@ std::string BluetoothAvrcpProfileService::folderItemTypeEnumToString(BluetoothAv
 	}
 }
 
+// The device answers ChangeFolder and Play over AVRCP, possibly seconds later: the caller is answered with that
+// result, not as soon as the SIL has sent the request (a refused folder change or play looked done).
+static void sendBrowseRequest(LS::Message &request, AvrcpBrowseRequest browseRequest, BluetoothAvrcpProfile *impl,
+							  const std::string &itemPath, const std::string &adapterAddress,
+							  const std::string &deviceAddress)
+{
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+	sendAvrcpBrowseRequest(impl, browseRequest, itemPath,
+		[requestMessage, adapterAddress, deviceAddress](BluetoothError error) {
+			if (BLUETOOTH_ERROR_NONE != error)
+			{
+				LSUtils::respondWithError(requestMessage, error);
+				LSMessageUnref(requestMessage);
+				return;
+			}
+			pbnjson::JValue responseObj = pbnjson::Object();
+
+			responseObj.put("adapterAddress", adapterAddress);
+			responseObj.put("address", deviceAddress);
+			responseObj.put("returnValue", true);
+			LSUtils::postToClient(requestMessage, responseObj);
+			LSMessageUnref(requestMessage);
+		});
+}
+
 bool BluetoothAvrcpProfileService::changePath(LSMessage &message)
 {
 	BT_INFO("AVRCP", 0, "Luna API is called : [%s : %d]", __FUNCTION__, __LINE__);
@@ -3334,20 +3361,8 @@ bool BluetoothAvrcpProfileService::changePath(LSMessage &message)
 		return true;
 	}
 
-	BluetoothError error = impl->changePath(requestObj["itemPath"].asString());
-	if (BLUETOOTH_ERROR_NONE != error)
-	{
-		LSUtils::respondWithError(request, error);
-		return true;
-	}
-
-	pbnjson::JValue responseObj = pbnjson::Object();
-
-	responseObj.put("adapterAddress", adapterAddress);
-	responseObj.put("address", deviceAddress);
-	responseObj.put("returnValue", true);
-	LSUtils::postToClient(request, responseObj);
-
+	sendBrowseRequest(request, AvrcpBrowseRequest::CHANGE_PATH, impl, requestObj["itemPath"].asString(),
+					  adapterAddress, deviceAddress);
 	return true;
 }
 
@@ -3396,19 +3411,8 @@ bool BluetoothAvrcpProfileService::playItem(LSMessage &message)
 		return true;
 	}
 
-	BluetoothError error = impl->playItem(requestObj["itemPath"].asString());
-	if (BLUETOOTH_ERROR_NONE != error)
-	{
-		LSUtils::respondWithError(request, error);
-		return true;
-	}
-	pbnjson::JValue responseObj = pbnjson::Object();
-
-	responseObj.put("adapterAddress", adapterAddress);
-	responseObj.put("address", deviceAddress);
-	responseObj.put("returnValue", true);
-	LSUtils::postToClient(request, responseObj);
-
+	sendBrowseRequest(request, AvrcpBrowseRequest::PLAY_ITEM, impl, requestObj["itemPath"].asString(),
+					  adapterAddress, deviceAddress);
 	return true;
 }
 
