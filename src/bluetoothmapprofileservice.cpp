@@ -99,16 +99,10 @@ void BluetoothMapProfileService::propertiesChanged(const std::string &adapterAdd
 		}
 	}
 
-	if(!connected)
-	{
-		auto watchesIter = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
-		if (watchesIter == mConnectWatchesForMultipleAdaptersWithSessionKey.end())
-			return;
-		auto watchIter = (watchesIter->second).find(sessionKey);
-		if (watchIter == (watchesIter->second).end())
-			return;
+	// A session that ends is cleaned up whether or not it was connected with a subscription; without one it
+	// used to stay marked connected, and every later connect was refused as already connected.
+	if (!connected && !getSessionId(adapterAddress, sessionKey).empty())
 		handleDeviceClientDisappeared(adapterAddress, sessionKey);
-	}
 
 }
 
@@ -317,6 +311,7 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 		return true;
 	}
 
+	LSUtils::ClientWatch *newWatch = nullptr;
 	if (request.isSubscription())
 	{
 		auto watchesIter = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
@@ -325,6 +320,7 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			std::map<std::string, LSUtils::ClientWatch*> connectWatches;
 			auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 								std::bind(&BluetoothMapProfileService::handleConnectClientDisappeared, this, adapterAddress, sessionKey));
+			newWatch = watch;
 
 			connectWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(sessionKey, watch));
 			mConnectWatchesForMultipleAdaptersWithSessionKey.insert(std::pair<std::string, std::map<std::string, LSUtils::ClientWatch*>>(adapterAddress, connectWatches));
@@ -334,9 +330,9 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			auto watchIter = (watchesIter->second).find(sessionKey);
 			if (watchIter == (watchesIter->second).end())
 			{
-				std::map<std::string, LSUtils::ClientWatch*> connectWatches;
 				auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 									std::bind(&BluetoothMapProfileService::handleConnectClientDisappeared, this, adapterAddress, sessionKey));
+				newWatch = watch;
 				(watchesIter->second).insert(std::pair<std::string, LSUtils::ClientWatch*>(sessionKey, watch));
 			}
 		}
@@ -345,7 +341,7 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
-	auto connectCallback = [ = ](BluetoothError error, const std::string& sessionId) {
+	auto connectCallback = [=, this](BluetoothError error, const std::string& sessionId) {
 		LS::Message request(requestMessage);
 
 		pbnjson::JValue responseObj;
@@ -355,6 +351,19 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			markDeviceAsNotConnecting(adapterAddress, sessionKey);
 			notifyGetStatusSubscribers(adapterAddress, sessionKey);
 			LSUtils::respondWithError(request, error);
+
+			// The subscription's watch went with the failed connect. It used to stay: the client's later
+			// connects got no watch of their own, and its leaving disconnected nothing.
+			auto watches = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
+			if (newWatch && watches != mConnectWatchesForMultipleAdaptersWithSessionKey.end())
+			{
+				auto entry = watches->second.find(sessionKey);
+				if (entry != watches->second.end() && entry->second == newWatch)
+				{
+					watches->second.erase(entry);
+					delete newWatch;
+				}
+			}
 			LSMessageUnref(request.get());
 		}
 		else
@@ -371,7 +380,8 @@ bool BluetoothMapProfileService::connect(LSMessage &message)
 			responseObj.put("sessionId", sessionId);
 			responseObj.put("instanceName", instanceName);
 			LSUtils::postToClient(request, responseObj);
-
+			// Released on success too; a subscription keeps its own reference in the connect watch.
+			LSMessageUnref(request.get());
 		}
 	};
 	markDeviceAsConnecting(adapterAddress, sessionKey);
@@ -404,28 +414,38 @@ void BluetoothMapProfileService::handleConnectClientDisappeared(const std::strin
 	auto watchIter = (watchesIter->second).find(sessionKey);
 	if (watchIter == (watchesIter->second).end())
 		return;
+	LSUtils::ClientWatch *watch = watchIter->second;
 
-	auto disconnectCallback = [ = ](BluetoothError error, const std::string &instanceName) {
+	// Removes the watch only if it is still this one. The callback used to keep the map iterators across the
+	// asynchronous disconnect; when the link dropped meanwhile, removeConnectWatchForDevice() had already
+	// erased that node and deleted the watch, and the callback erased and deleted them again.
+	auto removeWatch = [this, adapterAddress, sessionKey, watch]() {
+		auto watches = mConnectWatchesForMultipleAdaptersWithSessionKey.find(adapterAddress);
+		if (watches == mConnectWatchesForMultipleAdaptersWithSessionKey.end())
+			return;
+		auto entry = watches->second.find(sessionKey);
+		if (entry == watches->second.end() || entry->second != watch)
+			return;
+		watches->second.erase(entry);
+		delete watch;
+	};
+
+	auto disconnectCallback = [this, adapterAddress, sessionKey, removeWatch](BluetoothError /*error*/, const std::string &/*instanceName*/) {
 		handleMessageNotificationClientDisappeared(adapterAddress,sessionKey);
 		removeDeviceAsConnectedWithSessionKey(adapterAddress, sessionKey);
 		markDeviceAsNotConnected(adapterAddress, sessionKey);
 		markDeviceAsNotConnecting(adapterAddress, sessionKey);
 		notifyGetStatusSubscribers(adapterAddress, sessionKey);
-		if(watchIter->second)
-		{
-			LSUtils::ClientWatch *watch = watchIter->second;
-			(watchesIter->second).erase(watchIter);
-			delete watch;
-		}
+		removeWatch();
 	};
 
-	std::string address = parseAddressFromSessionKey(sessionKey);
 	std::string sessionId = getSessionId(adapterAddress, sessionKey);
+	BluetoothMapProfile *impl = getImpl<BluetoothMapProfile>(adapterAddress);
 
-	if(!sessionId.empty())
-	{
-		getImpl<BluetoothMapProfile>(adapterAddress)->disconnect(sessionKey, sessionId, disconnectCallback);
-	}
+	if (!sessionId.empty() && impl)
+		impl->disconnect(sessionKey, sessionId, disconnectCallback);
+	else
+		removeWatch();	// nothing to disconnect; the watch used to stay
 }
 
 
@@ -546,7 +566,7 @@ bool BluetoothMapProfileService::disconnect(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto disconnectCallback = [ = ](BluetoothError error, const std::string &instanceName) {
+	auto disconnectCallback = [=, this](BluetoothError error, const std::string &instanceName) {
 
 		LS::Message request(requestMessage);
 
@@ -564,6 +584,8 @@ bool BluetoothMapProfileService::disconnect(LSMessage &message)
 		responseObj.put("instanceName", instanceName);
 		responseObj.put("sessionId", sessionId);
 		LSUtils::postToClient(request, responseObj);
+		// Ends the session's message notification subscription; it used to stay, with its subscription point.
+		handleMessageNotificationClientDisappeared(adapterAddress, sessionKey);
 		removeDeviceAsConnectedWithSessionKey(adapterAddress, sessionKey);
 		markDeviceAsNotConnected(adapterAddress, sessionKey);
 		markDeviceAsNotConnecting(adapterAddress, sessionKey);
@@ -802,12 +824,13 @@ bool BluetoothMapProfileService::getMessageFilters(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto getMessageFiltersCallback = [ = ](BluetoothError error,std::list<std::string> filters) {
+	auto getMessageFiltersCallback = [=, this](BluetoothError error,std::list<std::string> filters) {
 		LS::Message request(requestMessage);
 
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -1247,6 +1270,7 @@ bool BluetoothMapProfileService::getMessage(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -1291,18 +1315,23 @@ bool BluetoothMapProfileService::isGetMessageSchemaAvailable(LS::Message &reques
 
 std::string BluetoothMapProfileService::buildStorageDirPath(const std::string &path, const std::string &address)
 {
+	std::string deviceFolder = replaceString(convertToLower(address),":","_");
+	if (!isSinglePathComponent(deviceFolder))
+		return "";
+
 	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
 	result += "/";
 	result += "map";
 	result += "/";
-	result += replaceString(convertToLower(address),":","_");
+	result += deviceFolder;
 	result += "/";
 	if (g_mkdir_with_parents(result.c_str(), 0755) != 0)
 	{
 		BT_DEBUG("failed to create folder: %s", result.c_str());
 	}
-	result += path;
-	return result;
+
+	// Empty, which the callers reject, when the client's file name would leave the device folder.
+	return resolvePathUnderDirectory(result, path);
 }
 
 bool BluetoothMapProfileService::setMessageStatus(LSMessage &message)
@@ -1338,6 +1367,7 @@ bool BluetoothMapProfileService::setMessageStatus(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -1402,7 +1432,19 @@ bool BluetoothMapProfileService::pushMessage(LSMessage &message)
 		return true;
 	}
 
-	std::string sourceFile = requestObj["sourceFile"].asString();
+	// The file is read and sent to the remote device: it has to be in the storage directory, as for OPP.
+	// Any file the service could read used to be accepted, also through a symbolic link.
+	std::string requestedSourceFile = requestObj["sourceFile"].asString();
+	std::string sourceFile;
+	if (g_path_is_absolute(requestedSourceFile.c_str()))
+	{
+		if (!resolveUnderDirectory(requestedSourceFile, WEBOS_MOUNTABLESTORAGEDIR, sourceFile))
+			sourceFile.clear();
+	}
+	else
+	{
+		sourceFile = resolvePathUnderDirectory(WEBOS_MOUNTABLESTORAGEDIR, requestedSourceFile);
+	}
 	std::string folder = requestObj["folder"].asString();
 
 	std::string charset = "utf8";
@@ -1425,7 +1467,7 @@ bool BluetoothMapProfileService::pushMessage(LSMessage &message)
 
 	if (!checkFileIsValid(sourceFile)) {
 		std::string errorMessage = "Supplied file ";
-		errorMessage += sourceFile;
+		errorMessage += requestedSourceFile;
 		errorMessage += " does not exist or is invalid";
 		LSUtils::respondWithError(request, errorMessage, BT_ERR_SRCFILE_INVALID);
 		return true;
@@ -1440,6 +1482,7 @@ bool BluetoothMapProfileService::pushMessage(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(request, error);
+			LSMessageUnref(request.get());	// leaked on errors
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();

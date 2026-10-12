@@ -83,8 +83,8 @@ public:
 	BluetoothA2dpProfileService(BluetoothManagerService *manager);
 	~BluetoothA2dpProfileService();
 
-	void initialize();
-	void initialize(const std::string &adapterAddress);
+	void initialize() override;
+	void initialize(const std::string &adapterAddress) override;
 	bool startStreaming(LSMessage &message);
 	bool stopStreaming(LSMessage &message);
 	bool getAudioPath(LSMessage &message);
@@ -94,17 +94,17 @@ public:
 	bool enableDelayReporting(LSMessage &message);
 	bool disableDelayReporting(LSMessage &message);
 
-	void stateChanged(std::string address, BluetoothA2dpProfileState state);
-	void stateChanged(const std::string adapterAddress, const std::string address, BluetoothA2dpProfileState state);
-	void audioSocketCreated(const std::string &address, const std::string &path, BluetoothA2dpAudioSocketType type, bool isIn);
-	void audioSocketDestroyed(const std::string &address, const std::string &path, BluetoothA2dpAudioSocketType type, bool isIn);
-	void sbcConfiguraionChanged(const std::string &address, const BluetoothSbcConfiguration &sbcConfiguration);
-	void aptxConfigurationChanged(const std::string &address, const BluetoothAptxConfiguration &aptxConfiguration);
-	void delayReportChanged(const std::string &adapterAddress, const std::string &address, uint16_t delay);
+	void stateChanged(std::string address, BluetoothA2dpProfileState state) override;
+	void stateChanged(const std::string adapterAddress, const std::string address, BluetoothA2dpProfileState state) override;
+	void audioSocketCreated(const std::string &address, const std::string &path, BluetoothA2dpAudioSocketType type, bool isIn) override;
+	void audioSocketDestroyed(const std::string &address, const std::string &path, BluetoothA2dpAudioSocketType type, bool isIn) override;
+	void sbcConfigurationChanged(const std::string &address, const BluetoothSbcConfiguration &sbcConfiguration) override;
+	void aptxConfigurationChanged(const std::string &address, const BluetoothAptxConfiguration &aptxConfiguration) override;
+	void delayReportChanged(const std::string &adapterAddress, const std::string &address, uint16_t delay) override;
 
 protected:
 	pbnjson::JValue buildGetStatusResp(bool connected, bool connecting, bool subscribed, bool returnValue,
-                                              std::string adapterAddress, std::string deviceAddress);
+                                              std::string adapterAddress, std::string deviceAddress) override;
 
 private:
 	void handleGetCodecConfigurationClientDisappeared(const std::string &adapterAddress, const std::string &address);

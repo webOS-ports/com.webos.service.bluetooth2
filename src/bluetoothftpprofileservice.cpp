@@ -71,7 +71,7 @@ void BluetoothFtpProfileService::cancelTransfer(BluetoothFtpTransferId id, bool 
 	transfer->canceled = true;
 	transfer->clientDisappeared = clientDisappeared;
 
-	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError error) {
+	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError /*error*/) {
 		BT_DEBUG("Successfully canceled bluetooth FTP transfer %" PRIu64, id);
 
 		// Either that this time the client is invalid because he disappeared
@@ -510,10 +510,9 @@ bool BluetoothFtpProfileService::pullFile(LSMessage &message)
 
 std::string BluetoothFtpProfileService::buildStorageDirPath(const std::string &path)
 {
-	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
-	result += "/";
-	result += path;
-	return result;
+	// Empty, which the callers reject as an invalid path, when the client's path would leave the storage
+	// directory; "../../etc/shadow" used to be sent to the remote device.
+	return resolvePathUnderDirectory(WEBOS_MOUNTABLESTORAGEDIR, path);
 }
 
 bool BluetoothFtpProfileService::pushFile(LSMessage &message)

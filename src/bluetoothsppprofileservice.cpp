@@ -43,6 +43,8 @@ BluetoothSppProfileService::BluetoothSppProfileService(BluetoothManagerService *
 
 BluetoothSppProfileService::~BluetoothSppProfileService()
 {
+	for (auto &channels : mChannelImpls)
+		delete channels.second;
 }
 
 void BluetoothSppProfileService::initialize()
@@ -74,7 +76,10 @@ void BluetoothSppProfileService::reset(const std::string &adapterAddress)
 	if (implIter == mChannelImpls.end())
 		return;
 
+	// Deleted now that it removes its pending notifications itself; it used to be leaked.
+	ChannelManager *channelManager = implIter->second;
 	mChannelImpls.erase(implIter);
+	delete channelManager;
 }
 
 void BluetoothSppProfileService::createChannelManager(const std::string &adapterAddress)
@@ -124,8 +129,10 @@ void BluetoothSppProfileService::handleConnectClientDisappeared(const std::strin
 	if (!mImpl)
 		return;
 
-	auto disconnectCallback = [this, channelId, adapterAddress, address, channelManager](BluetoothError error) {
-		if (!channelManager->isChannelConnected(address))
+	// The channel manager is looked up when the SIL answers: it goes with its adapter.
+	auto disconnectCallback = [this, adapterAddress, address](BluetoothError /*error*/) {
+		ChannelManager *channelManager = findChannelImpl(adapterAddress);
+		if (channelManager && !channelManager->isChannelConnected(address))
 			markDeviceAsNotConnected(adapterAddress, address);
 	};
 
@@ -157,8 +164,16 @@ void BluetoothSppProfileService::connectToStack(LS::Message &request, pbnjson::J
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto isConnectedCallback = [this, requestMessage, adapterAddress, address, uuid, channelManager](const BluetoothError error, const bool state) {
+	// The channel manager is looked up in each step: it goes with its adapter, which can go meanwhile.
+	auto isConnectedCallback = [this, requestMessage, adapterAddress, address, uuid](const BluetoothError error, const bool state) {
 		LS::Message request(requestMessage);
+		ChannelManager *channelManager = findChannelImpl(adapterAddress);
+		if (!channelManager)
+		{
+			LSUtils::respondWithError(request, BT_ERR_PROFILE_CONNECT_FAIL);
+			LSMessageUnref(request.get());
+			return;
+		}
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -177,9 +192,16 @@ void BluetoothSppProfileService::connectToStack(LS::Message &request, pbnjson::J
 		channelManager->markChannelAsConnecting(uuid);
 		notifyStatusSubscribers(adapterAddress, address, uuid, channelManager->isChannelConnected(address));
 
-		auto connectCallback = [this, requestMessage, adapterAddress, address, uuid, channelManager](const BluetoothError error, const BluetoothSppChannelId channelId) {
+		auto connectCallback = [this, requestMessage, adapterAddress, address, uuid](const BluetoothError error, const BluetoothSppChannelId channelId) {
 			LS::Message request(requestMessage);
 			bool subscribed = false;
+			ChannelManager *channelManager = findChannelImpl(adapterAddress);
+			if (!channelManager)
+			{
+				LSUtils::respondWithError(request, BT_ERR_PROFILE_CONNECT_FAIL);
+				LSMessageUnref(request.get());
+				return;
+			}
 
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -299,7 +321,7 @@ void BluetoothSppProfileService::disconnectToStack(LS::Message &request, pbnjson
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto disconnectCallback = [this, requestMessage, adapterAddress, channelId, stackChannelId](BluetoothError error) {
+	auto disconnectCallback = [this, requestMessage, adapterAddress, channelId](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (error != BLUETOOTH_ERROR_NONE)
@@ -578,7 +600,7 @@ bool BluetoothSppProfileService::writeData(LSMessage &message)
 
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
-	auto writeDataCallback = [this, requestMessage, adapterAddress](BluetoothError error) {
+	auto writeDataCallback = [requestMessage, adapterAddress](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (error != BLUETOOTH_ERROR_NONE)
@@ -782,7 +804,7 @@ void BluetoothSppProfileService::channelStateChanged(const std::string &adapterA
 			disableBinarySocket(userChannelId);
 
 		removeConnectWatchForDevice(userChannelId, true);
-		channelManager->markChannelAsNotConnected(channelId, getManager()->getAddress());
+		channelManager->markChannelAsNotConnected(channelId, adapterAddress);	// was the default adapter's address
 		if (!channelManager->isChannelConnected(address))
 			markDeviceAsNotConnected(adapterAddress, address);
 	}
@@ -822,10 +844,12 @@ BluetoothBinarySocket* BluetoothSppProfileService::findBinarySocket(const std::s
 
 void BluetoothSppProfileService::enableBinarySocket(const std::string &adapterAddress, const std::string &channelId)
 {
+	// A socket left for this channel would leak, its insert below failing.
+	disableBinarySocket(channelId);
+
 	bool created = false;
 	BluetoothBinarySocket *binarySocket = new BluetoothBinarySocket();
-	if (binarySocket)
-		created = binarySocket->createBinarySocket(channelId);
+	created = binarySocket->createBinarySocket(channelId);
 
 	if (created)
 	{
@@ -895,13 +919,16 @@ void BluetoothSppProfileService::sendDataToStack(const std::string &channelId, c
 		return;
 	}
 
-	auto writeDataCallback = [binarySocket](BluetoothError error) {
+	// Look the socket up again: the channel can be disconnected, and the socket deleted, before the SIL
+	// answers. The flag is cleared on an error too; it used to stay set, and the socket's read watch then
+	// returned without reading on every wakeup, spinning the main loop for good.
+	auto writeDataCallback = [this, channelId](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
-		{
 			BT_DEBUG("Failed to write the binary socket data to stack");
-			return;
-		}
-		binarySocket->setWriting(false);
+
+		auto socket = findBinarySocket(channelId);
+		if (socket)
+			socket->setWriting(false);
 	};
 
 	binarySocket->setWriting(true);

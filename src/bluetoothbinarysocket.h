@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <string>
 #include <functional>
+#include <vector>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <string.h>
@@ -29,14 +30,18 @@
 #include <gio/gio.h>
 #include <glib-object.h>
 
+#ifndef BINARY_SOCKET_DIRECTORY	// the unit tests use their own
 #define BINARY_SOCKET_DIRECTORY         "/dev/bluetooth"
+#endif
 #define BINARY_SOCKET_FILE_NAME_PREFIX  "binarySocketPath"
 #define BINARY_SOCKET_FILE_NAME_SIZE    64
 #define DEFAULT_LISTEN_BACKLOG          5
 #define READ_BUFFER_SIZE                1024
 #define DATA_BUFFER_SIZE                1024*5
 #define MAX_WRITE_RETRY_COUNT           1000
+#ifndef WRITE_RETRY_SLEEP_TIME	// the unit tests use their own
 #define WRITE_RETRY_SLEEP_TIME          10000
+#endif
 
 typedef std::function<void(guchar *readBuf, gsize readLen)> BluetoothBinarySocketReceiveCallback;
 
@@ -57,21 +62,24 @@ private:
 	char mSocketFileName[BINARY_SOCKET_FILE_NAME_SIZE];
 	char mBufferData[DATA_BUFFER_SIZE];
 	uint32_t mBufferSize;
-	const uint8_t *mRetryData;
-	uint32_t mRetryDataSize;
-	uint32_t mRetryTimeout;
+	// Data not yet written to the client, in order. A copy: what sendData() gets is only valid for the call.
+	std::vector<uint8_t> mRetryData;
+	guint mRetryTimeout;
 	uint32_t mRetryCount;
 	int mServerSocketFd;
 	int mClientSocketFd;
 	bool mWriting;
 	GIOChannel *mServerIoChannel;
 	GIOChannel *mClientIoChannel;
+	guint mServerWatch;
+	guint mClientWatch;
 	BluetoothBinarySocketReceiveCallback mCallback;
 
 private:
 	void retrySendData(const uint8_t *data, const uint32_t size);
 	void storeSendDataToBuffer(const uint8_t *data, const uint32_t size);
 	void sendBufferData();
+	void closeClient();
 
 private:
 	static gboolean getAcceptRequest(GIOChannel *io, GIOCondition cond, gpointer userData);

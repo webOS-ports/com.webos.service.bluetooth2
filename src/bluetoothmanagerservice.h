@@ -18,6 +18,7 @@
 #ifndef BLUETOOTH_MANAGER_H_
 #define BLUETOOTH_MANAGER_H_
 
+#include <map>
 #include <string>
 #include <sstream>
 #include <unordered_map>
@@ -182,6 +183,10 @@ private:
 	void createProfiles();
 	bool notifyAdvertisingDropped(uint8_t advertiserId);
 	bool notifyAdvertisingDisabled(uint8_t advertiserId);
+	void postToAdvertiserClient(uint8_t advertiserId, pbnjson::JValue &responseObj);
+	void removeAdvertiserWatch(uint8_t advertiserId);
+	void removeAdvertisersOfAdapter(const std::string &adapterAddress);
+	void disableAndUnregisterAdvertiser(const std::string &adapterAddress, uint8_t advertiserId);
 	bool setPairableState(const std::string &adapterAddress, bool value);
 
 	//BLE
@@ -210,7 +215,9 @@ private:
 	BluetoothWoBleTriggerDeviceList mWoBleTriggerDevices;
 	BluetoothPairingIOCapability mPairingIOCapability;
 
-	LSUtils::ClientWatch *mAdvertisingWatch;
+	// The watch of the startAdvertising call that registered each advertiser; disable and drop notices go
+	// to that client. A single watch, replaced by every start, used to get all of them, or none at all.
+	std::map<uint8_t, LSUtils::ClientWatch*> mAdvertisingWatches;
 
 	std::unordered_map<uint8_t, AdvertiserInfo*> mAdvertisers;
 	std::map<uint8_t, std::string> mAdvIdAdapterMap;

@@ -75,7 +75,7 @@ private:
 	std::string typeToString(BluetoothHfpAtCommand::Type type) const;
 	BluetoothHfpAtCommand::Type stringToType(const std::string &type) const;
 	void startRinging(const std::string &address, const std::string &phoneNumber);
-	void stopRinging(const std::string &address);
+	void stopRinging(const std::string address);
 	void sendRingResultCode(const std::string &address);
 	void sendCLIPResultCode(const std::string &address);
 	void notifyReceiveATSubscribers(const std::string &key, const std::string &address, const BluetoothHfpAtCommand &atCommand);

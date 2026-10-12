@@ -97,19 +97,22 @@ public:
 									uint16_t keyRefreshPhase,
 									uint16_t nodeAddress = 0,
 									uint16_t appKeyIndex = 0);
+	void createNetworkResult(BluetoothError error, const std::string &adapterAddress);
+	void attachResult(BluetoothError error, const std::string &adapterAddress);
 
 private:
 	/* Private helper methods */
+	void networkFailed(BluetoothError error, const std::string &adapterAddress);
 	bool addClientWatch(LS::Message &request,
 						std::list<BluetoothClientWatch *> *clientWatch,
 						std::string adapterAddress, std::string deviceAddress);
 	void handleClientDisappeared(std::list<BluetoothClientWatch *> *clientWatch,
-								 const std::string senderName);
+								 BluetoothClientWatch *watch);
 	void handleKeyRefreshClientDisappeared(
 					std::map<uint16_t, BluetoothClientWatch *> &keyRefreshWatch,
 					const uint16_t netKeyIndex);
 	void removeClientWatch(std::list<BluetoothClientWatch *> *clientWatch,
-						   const std::string &senderName);
+						   BluetoothClientWatch *watch);
 	bool updateDeviceList(const std::string &adapterAddress, const int16_t rssi, const std::string &uuid, const std::string &name);
 	pbnjson::JValue appendDevice(const int16_t rssi, const std::string &uuid, const std::string &name);
 	pbnjson::JValue appendDevices(const std::string &adapterAddress);

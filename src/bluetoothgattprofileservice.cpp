@@ -24,6 +24,9 @@
 #include "logging.h"
 #include "utils.h"
 
+#include <algorithm>
+#include <charconv>
+
 using namespace std::placeholders;
 
 BluetoothGattProfileService::BluetoothGattProfileService(BluetoothManagerService *manager) :
@@ -57,24 +60,26 @@ BluetoothGattProfileService::BluetoothGattProfileService(BluetoothManagerService
 
 bool validateClientId(const std::string input)
 {
-	for(int i=0; i < input.size(); i++)
+	for (char c : input)
 	{
-		if(input[i] < '0' || input[i] > '9')
+		if (c < '0' || c > '9')
 			return false;
 	}
 	return true;
 }
 
+// 0 for anything that is not a decimal number up to 65535. std::stoi threw on a long string of digits, which
+// nothing catches on the way from a Luna call, and values above 65535 were truncated.
 uint16_t idToInt(const std::string input)
 {
-	if(input.empty())
+	if (input.empty() || !validateClientId(input))
 		return 0;
 
-	if(!validateClientId(input))
+	uint16_t id = 0;
+	auto [end, ec] = std::from_chars(input.data(), input.data() + input.size(), id);
+	if (ec != std::errc() || end != input.data() + input.size())
 		return 0;
-	
-	std::string::size_type sz;   // alias of size_t
-	return (uint16_t)(std::stoi(input,&sz));
+	return id;
 }
 
 std::string idToString(const uint16_t input)
@@ -200,7 +205,7 @@ pbnjson::JValue BluetoothGattProfileService::buildGetStatusResp(bool connected,
 }
 
 void BluetoothGattProfileService::removeConnectWatchForDevice(const std::string &adapterAddress,
-		const std::string &key,	bool disconnected, bool remoteDisconnect)
+		const std::string &key,	bool /*disconnected*/, bool remoteDisconnect)
 {
 	auto watchesIter = mConnectSubsMap.find(adapterAddress);
 	if (watchesIter == mConnectSubsMap.end())
@@ -487,9 +492,9 @@ bool BluetoothGattProfileService::discoverServices(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto discoverServicesCallback  = [this, requestMessage, remoteServiceDiscovery, adapterAddress, address](BluetoothError error) {
+	auto discoverServicesCallback  = [this, requestMessage, remoteServiceDiscovery, adapterAddress, address, requestReference](BluetoothError error) {
 		BT_INFO("BLE", 0, "Service discovery process finished for device %s", address.c_str());
 
 		if (mDiscoveringServices[address])
@@ -726,9 +731,9 @@ bool BluetoothGattProfileService::addService(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto addServiceCallback = [this, requestMessage, serviceUuid, adapterAddress](BluetoothError error) {
+	auto addServiceCallback = [this, requestMessage, serviceUuid, adapterAddress, requestReference](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
 			BT_ERROR("ADD_SERVICE_FAILED", 0, "Add service %s fail code %d", serviceUuid.c_str(), error);
@@ -806,7 +811,7 @@ bool BluetoothGattProfileService::removeService(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string adapterAddress;
 	if (!getManager()->isRequestedAdapterAvailable(request, requestObj, adapterAddress))
@@ -819,7 +824,7 @@ bool BluetoothGattProfileService::removeService(LSMessage &message)
 	}
 
 	std::string serviceUuid = requestObj["service"].asString();
-	auto removeServiceCallback = [this, requestMessage, serviceUuid, adapterAddress](BluetoothError error) {
+	auto removeServiceCallback = [requestMessage, serviceUuid, adapterAddress, requestReference](BluetoothError error) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -996,9 +1001,6 @@ bool BluetoothGattProfileService::getStatus(LSMessage &message)
 		subscribed = true;
 	}
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
 	bool isConnected = false;
 	auto iter = mConnectedDevicesMap.find(adapterAddress);
 	if ((iter != mConnectedDevicesMap.end()) && (iter->second.find(address) != iter->second.end()))
@@ -1044,7 +1046,7 @@ bool BluetoothGattProfileService::openServer(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string server = std::to_string(nextClientId());
 	if(findLocalServer(BluetoothUuid(server)) != nullptr)
@@ -1099,7 +1101,7 @@ bool BluetoothGattProfileService::closeServer(LSMessage &message)
 
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string adapterAddress;
 	if (!getManager()->isRequestedAdapterAvailable(request, requestObj, adapterAddress))
@@ -1592,6 +1594,8 @@ bool BluetoothGattProfileService::getConnectId(uint16_t clientId, uint16_t &conn
 			if (clientId == entry.second)
 			{
 				deviceAddress = convertToLower(entry.first);
+				// The client id, as connection id: bluez5 keys a GATT connection by one id that is both
+				// (Bluez5ProfileGatt::getConnectId returns the key disconnectGatt takes as the app id).
 				connectId = entry.second;
 				return true;
 			}
@@ -1731,9 +1735,9 @@ bool BluetoothGattProfileService::writeCharacteristicValue(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto writeCharacteristicCallback  = [this, requestMessage, characteristicUuid, serviceUuid, adapterAddress, deviceAddress](BluetoothError error) {
+	auto writeCharacteristicCallback  = [requestMessage, characteristicUuid, serviceUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error) {
 		BT_INFO("BLE", 0, "write characteristic complete for characteristic %s of service %s", characteristicUuid.c_str(), serviceUuid.c_str());
 
 		if (error != BLUETOOTH_ERROR_NONE)
@@ -1882,7 +1886,7 @@ bool BluetoothGattProfileService::readCharacteristicValue(LSMessage &message)
 
 	BluetoothUuidList characteristicUuids;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	std::string serviceUuid;
 	std::string characteristicUuid;
 	BluetoothGattCharacteristic characteristicToRead;
@@ -1906,7 +1910,7 @@ bool BluetoothGattProfileService::readCharacteristicValue(LSMessage &message)
 		}
 	}
 
-	auto readCharacteristicCallback  = [this, requestMessage, adapterAddress, address](BluetoothError error, BluetoothGattCharacteristic characteristic) {
+	auto readCharacteristicCallback  = [this, requestMessage, adapterAddress, address, requestReference](BluetoothError error, BluetoothGattCharacteristic characteristic) {
 		BT_INFO("BLE", 0, "Read characteristic complete");
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -1997,7 +2001,7 @@ bool BluetoothGattProfileService::readCharacteristicValues(LSMessage &message)
 
 	BluetoothUuidList characteristicUuids;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
 	std::string serviceUuid = requestObj["service"].asString();
 	auto characteristicUuidsArray = requestObj["characteristics"];
@@ -2014,7 +2018,7 @@ bool BluetoothGattProfileService::readCharacteristicValues(LSMessage &message)
 		characteristicUuids.push_back(BluetoothUuid(characteristicUuidsArray[i].asString()));
 	}
 
-	auto readCharacteristicCallback  = [this, requestMessage, serviceUuid, adapterAddress, deviceAddress](BluetoothError error, BluetoothGattCharacteristicList characteristicsList) {
+	auto readCharacteristicCallback  = [this, requestMessage, serviceUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error, BluetoothGattCharacteristicList characteristicsList) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -2047,6 +2051,38 @@ bool BluetoothGattProfileService::readCharacteristicValues(LSMessage &message)
 	return true;
 }
 
+// Drops one reference to the watch of one characteristic, and disables the notifications when it was the last.
+// The erased watch is not freed: monitor callbacks still in flight may hold it.
+void BluetoothGattProfileService::releaseCharacteristicWatch(const std::string &adapterAddress, const std::string &deviceAddress,
+                                                             uint16_t handle, const BluetoothUuid &serviceUuid,
+                                                             const BluetoothUuid &characteristicUuid)
+{
+	auto foundWatch = std::find_if(mCharacteristicWatchList.begin(), mCharacteristicWatchList.end(),
+	                               [&](const CharacteristicWatch *watchElement) {
+		if (watchElement->deviceAddress != deviceAddress)
+			return false;
+		if (handle > 0)
+			return watchElement->handle == handle;
+		return (watchElement->serviceId == serviceUuid) && (watchElement->characteristicId == characteristicUuid);
+	});
+
+	if (foundWatch == mCharacteristicWatchList.end())
+		return;
+
+	(*foundWatch)->unref();
+	if ((*foundWatch)->isUsed())
+		return;
+
+	BT_DEBUG("Disabling characteristic watch to device %s", (*foundWatch)->deviceAddress.c_str());
+	BluetoothGattProfile *impl = getImpl<BluetoothGattProfile>(adapterAddress);
+	if (impl)
+		impl->changeCharacteristicWatchStatus((*foundWatch)->deviceAddress, (*foundWatch)->serviceId,
+		        (*foundWatch)->characteristicId, false, [](BluetoothError /*error*/) {
+			BT_WARNING(MSGID_SUBSCRIPTION_CLIENT_DROPPED, 0, "No LS2 error response can be issued since subscription client has dropped");
+		});
+	mCharacteristicWatchList.erase(foundWatch);
+}
+
 void BluetoothGattProfileService::handleMonitorCharacteristicClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch)
 {
 	BT_INFO("BLE", 0, "%s: Monitor client disappeared for device %s", __func__, subscriptionInfo.deviceAddress.c_str());
@@ -2055,47 +2091,14 @@ void BluetoothGattProfileService::handleMonitorCharacteristicClientDropped(Monit
 		if (it->first != monitorCharacteristicsWatch)
 			continue;
 
-		auto candidate = it->second;
-
-		if (subscriptionInfo.handle > 0)
-		{
-			if((subscriptionInfo.deviceAddress != candidate.deviceAddress) || (subscriptionInfo.handle != candidate.handle))
-				continue;
-		}
-		else if ((subscriptionInfo.deviceAddress != candidate.deviceAddress) || (subscriptionInfo.serviceUuid != candidate.serviceUuid)
-			|| (subscriptionInfo.characteristicUuid != candidate.characteristicUuid))
-			continue;
-
-		auto foundWatch = std::find_if(mCharacteristicWatchList.begin(), mCharacteristicWatchList.end(), [subscriptionInfo] (const CharacteristicWatch *watchElement) {
-
-			if ((watchElement->deviceAddress == subscriptionInfo.deviceAddress) && (watchElement->handle == subscriptionInfo.handle))
-				return true;
-
-			else if ((watchElement->deviceAddress == subscriptionInfo.deviceAddress) && (watchElement->serviceId == subscriptionInfo.serviceUuid))
-				return true;
-
-			return false;
-		});
-
-		if (foundWatch != mCharacteristicWatchList.end())
-		{
-			(*foundWatch)->unref();
-			if (!((*foundWatch)->isUsed()))
-			{
-				BT_DEBUG("Disabling characteristic watch to device %s", (*foundWatch)->deviceAddress.c_str());
-
-				getImpl<BluetoothGattProfile>(subscriptionInfo.adapterAddress)->changeCharacteristicWatchStatus
-            ((*foundWatch)->deviceAddress, (*foundWatch)->serviceId, (*foundWatch)->characteristicId, false, [this](BluetoothError error) {
-					BT_WARNING(MSGID_SUBSCRIPTION_CLIENT_DROPPED, 0, "No LS2 error response can be issued since subscription client has dropped");
-				});
-				mCharacteristicWatchList.erase(foundWatch);
-			}
-		}
+		// The watch of this characteristic. Any watch in the same service used to match, so dropping one
+		// subscriber could disable another characteristic's notifications and leave its own on.
+		releaseCharacteristicWatch(subscriptionInfo.adapterAddress, subscriptionInfo.deviceAddress, subscriptionInfo.handle,
+		                           subscriptionInfo.serviceUuid, subscriptionInfo.characteristicUuid);
 
 		auto monitorSubscriptionWatch = it->first;
 		mMonitorCharacteristicSubscriptions.erase(it);
 		delete monitorSubscriptionWatch;
-		monitorSubscriptionWatch = 0;
 		break;
 	}
 }
@@ -2108,40 +2111,15 @@ void BluetoothGattProfileService::handleMonitorCharacteristicsClientDropped(Moni
 		if (it->first != monitorCharacteristicsWatch)
 			continue;
 
-		auto candidate = it->second;
-		if ((subscriptionInfo.deviceAddress != candidate.deviceAddress) || (subscriptionInfo.serviceUuid != candidate.serviceUuid)
-			|| (subscriptionInfo.characteristicUuids != candidate.characteristicUuids))
-			continue;
-
-		auto foundWatch = std::find_if(mCharacteristicWatchList.begin(), mCharacteristicWatchList.end(), [subscriptionInfo] (const CharacteristicWatch *watchElement) {
-			if ((watchElement->deviceAddress == subscriptionInfo.deviceAddress) && (watchElement->serviceId == subscriptionInfo.serviceUuid))
-			{
-				auto foundCharacteristic = std::find(subscriptionInfo.characteristicUuids.begin(), subscriptionInfo.characteristicUuids.end(), watchElement->characteristicId);
-				if (foundCharacteristic != subscriptionInfo.characteristicUuids.end())
-					return true;
-			}
-			return false;
-		});
-
-		if (foundWatch != mCharacteristicWatchList.end())
-		{
-			(*foundWatch)->unref();
-			if (!((*foundWatch)->isUsed()))
-			{
-				BT_DEBUG("Disabling characteristic watch to device %s", (*foundWatch)->deviceAddress.c_str());
-
-				getImpl<BluetoothGattProfile>(subscriptionInfo.adapterAddress)->changeCharacteristicWatchStatus
-            ((*foundWatch)->deviceAddress, (*foundWatch)->serviceId, (*foundWatch)->characteristicId, false, [this](BluetoothError error) {
-					BT_WARNING(MSGID_SUBSCRIPTION_CLIENT_DROPPED, 0, "No LS2 error response can be issued since subscription client has dropped");
-				});
-				mCharacteristicWatchList.erase(foundWatch);
-			}
-		}
+		// Every characteristic of the subscription: only the first match was released, and the others stayed
+		// enabled on the remote device for good.
+		for (const auto &characteristicUuid : subscriptionInfo.characteristicUuids)
+			releaseCharacteristicWatch(subscriptionInfo.adapterAddress, subscriptionInfo.deviceAddress, 0,
+			                           subscriptionInfo.serviceUuid, characteristicUuid);
 
 		auto monitorSubscriptionWatch = it->first;
 		mMonitorCharacteristicSubscriptions.erase(it);
 		delete monitorSubscriptionWatch;
-		monitorSubscriptionWatch = 0;
 		break;
 	}
 }
@@ -2203,8 +2181,6 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 		return true;
 	}
 
-	LSUtils::ClientWatch *monitorCharacteristicsWatch;
-	monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(),nullptr);
 
 	uint16_t appId = 0;
 	uint16_t connectId = 0;
@@ -2275,14 +2251,20 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 	//two entries in the mMonitorCharacteristicSubscriptions list. Now if the second app drops subscription, the first entry of the
 	//combination is picked up in the list iteration and the wrong watch is dropped. To avoid this, the client watch object is saved
 	//and verified before dropping the subscription.
+	// Created once the request has been validated: the early error returns above leaked it.
+	LSUtils::ClientWatch *monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(), nullptr);
 	monitorCharacteristicsWatch->setCallback (std::bind(&BluetoothGattProfileService::handleMonitorCharacteristicClientDropped, this, subscriptionInfo, monitorCharacteristicsWatch));
 
 	mMonitorCharacteristicSubscriptions.push_back(std::make_pair(monitorCharacteristicsWatch, subscriptionInfo));
 
 	auto foundWatch = std::find_if(mCharacteristicWatchList.begin(), mCharacteristicWatchList.end(), [deviceAddress, subscriptionInfo](const CharacteristicWatch* watchElement)
 	{
+		// The characteristic too: with the handle always 0, any earlier watch on the device matched, and a
+		// second characteristic was answered subscribed:true but never registered with the SIL.
 		return ((watchElement->deviceAddress == deviceAddress) &&
-			 (watchElement->handle == subscriptionInfo.handle));
+			 (watchElement->handle == subscriptionInfo.handle) &&
+			 (watchElement->serviceId == subscriptionInfo.serviceUuid) &&
+			 (watchElement->characteristicId == subscriptionInfo.characteristicUuid));
 	});
 
 	if (foundWatch != mCharacteristicWatchList.end())
@@ -2305,7 +2287,7 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	BT_DEBUG("Registering with SIL API for %zu characteristic watch list elements", mCharacteristicWatchList.size());
 	for (auto characteristicWatch : mCharacteristicWatchList)
 	{
@@ -2316,7 +2298,7 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 		BT_DEBUG("Registering a watch with SIL API for device %s, service %s, characteristic %s",
 		          characteristicWatch->deviceAddress.c_str(), characteristicWatch->serviceId.toString().c_str(), characteristicWatch->characteristicId.toString().c_str());
 
-		auto monitorCallback = [this, requestMessage, characteristicWatch] (BluetoothError error)
+		auto monitorCallback = [requestMessage, characteristicWatch, requestReference] (BluetoothError error)
 		{
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -2332,7 +2314,7 @@ bool BluetoothGattProfileService::monitorCharacteristic(LSMessage &message)
 		BT_DEBUG("[%s](%d) getImpl->changeCharacteristicWatchStatus\n", __FUNCTION__, __LINE__);
 		if (!characteristicWatch->deviceAddress.empty())
 		{
-			uint16_t appId = getImpl<BluetoothGattProfile>(adapterAddress)->getAppId(deviceAddress);
+			uint16_t appId = getImpl<BluetoothGattProfile>(adapterAddress)->getAppId(characteristicWatch->deviceAddress);	// the watch's device, not the request's
 			if (appId > 0)
 			{
 				if(characteristicWatch->handle == 0)
@@ -2381,7 +2363,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		else if (!requestObj.hasKey("subscribe"))
 			LSUtils::respondWithError(request, BT_ERR_MTHD_NOT_SUBSCRIBED);
 
-		if (!requestObj.hasKey("service"))
+		else if (!requestObj.hasKey("service"))
 			LSUtils::respondWithError(request, BT_ERR_GATT_SERVICE_NAME_PARAM_MISSING);
 
 		else if (!requestObj.hasKey("characteristics"))
@@ -2403,8 +2385,6 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		return true;
 	}
 
-	LSUtils::ClientWatch *monitorCharacteristicsWatch;
-	monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(),nullptr);
 
 	uint16_t appId = 0;
 	uint16_t connectId = 0;
@@ -2466,6 +2446,8 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 	//two entries in the mMonitorCharacteristicSubscriptions list. Now if the second app drops subscription, the first entry of the
 	//combination is picked up in the list iteration and the wrong watch is dropped. To avoid this, the client watch object is saved
 	//and verified before dropping the subscription.
+	// Created once the request has been validated: the early error returns above leaked it.
+	LSUtils::ClientWatch *monitorCharacteristicsWatch = new LSUtils::ClientWatch(getManager()->get(), request.get(), nullptr);
 	monitorCharacteristicsWatch->setCallback (std::bind(&BluetoothGattProfileService::handleMonitorCharacteristicsClientDropped, this, subscriptionInfo, monitorCharacteristicsWatch));
 
 	mMonitorCharacteristicSubscriptions.push_back(std::make_pair(monitorCharacteristicsWatch, subscriptionInfo));
@@ -2499,7 +2481,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	BT_DEBUG("Registering with SIL API for %zu characteristic watch list elements", mCharacteristicWatchList.size());
 	for (auto characteristicWatch : mCharacteristicWatchList)
 	{
@@ -2510,7 +2492,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		BT_DEBUG("Registering a watch with SIL API for device %s, service %s, characteristic %s",
 		          characteristicWatch->deviceAddress.c_str(), characteristicWatch->serviceId.toString().c_str(), characteristicWatch->characteristicId.toString().c_str());
 
-		auto monitorCallback = [this, requestMessage, characteristicWatch] (BluetoothError error)
+		auto monitorCallback = [requestMessage, characteristicWatch, requestReference] (BluetoothError error)
 		{
 			if (error != BLUETOOTH_ERROR_NONE)
 			{
@@ -2526,7 +2508,7 @@ bool BluetoothGattProfileService::monitorCharacteristics(LSMessage &message)
 		BT_DEBUG("[%s](%d) getImpl->changeCharacteristicWatchStatus\n", __FUNCTION__, __LINE__);
 		if (!characteristicWatch->deviceAddress.empty())
 		{
-			uint16_t appId = getImpl<BluetoothGattProfile>(adapterAddress)->getAppId(deviceAddress);
+			uint16_t appId = getImpl<BluetoothGattProfile>(adapterAddress)->getAppId(characteristicWatch->deviceAddress);	// the watch's device, not the request's
 			if (appId > 0)
 				getImpl<BluetoothGattProfile>(adapterAddress)->changeCharacteristicWatchStatus(characteristicWatch->deviceAddress, appId, characteristicWatch->serviceId, characteristicWatch->characteristicId, true, monitorCallback);
 
@@ -2584,17 +2566,18 @@ bool BluetoothGattProfileService::isDescriptorValid(const std::string &address, 
 
 void BluetoothGattProfileService::removeSubscriptionPoint(const std::string &adapterAddress, const std::string &devAddress)
 {
-	if (mConnectSubsMap.find(adapterAddress) != mConnectSubsMap.end())
+	auto adapterSubs = mConnectSubsMap.find(adapterAddress);
+	if (adapterSubs == mConnectSubsMap.end())
+		return;
+
+	// The erase used to be outside this check, so a device without a connect subscription (a connect
+	// without subscribe, then disconnect) erased end(), which is undefined behaviour on a std::map.
+	auto iter = adapterSubs->second.find(devAddress);
+	if (iter != adapterSubs->second.end())
 	{
-		auto iter = mConnectSubsMap[adapterAddress].find(devAddress);
-		if (iter != mConnectSubsMap[adapterAddress].end())
-		{
-			LS::SubscriptionPoint* sPtr = mConnectSubsMap[adapterAddress][devAddress].first;
-			GattConnSubsInfo* gPtr = mConnectSubsMap[adapterAddress][devAddress].second;
-			delete sPtr;
-			delete gPtr;
-		}
-		mConnectSubsMap[adapterAddress].erase(iter);
+		delete iter->second.first;
+		delete iter->second.second;
+		adapterSubs->second.erase(iter);
 	}
 }
 
@@ -2759,7 +2742,7 @@ bool BluetoothGattProfileService::readDescriptorValue(LSMessage &message)
 
 	std::string address;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	if (!deviceAddress.empty())
 		address = deviceAddress;
 
@@ -2790,7 +2773,7 @@ bool BluetoothGattProfileService::readDescriptorValue(LSMessage &message)
 		}
 	}
 
-	auto readDescriptorCallback  = [this, requestMessage, adapterAddress, deviceAddress](BluetoothError error, BluetoothGattDescriptor descriptor) {
+	auto readDescriptorCallback  = [this, requestMessage, adapterAddress, deviceAddress, requestReference](BluetoothError error, BluetoothGattDescriptor descriptor) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -2884,7 +2867,7 @@ bool BluetoothGattProfileService::readDescriptorValues(LSMessage &message)
 
 	std::string address;
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 	if (!deviceAddress.empty())
 		address = deviceAddress;
 
@@ -2905,7 +2888,7 @@ bool BluetoothGattProfileService::readDescriptorValues(LSMessage &message)
 		descriptors.push_back(BluetoothUuid(descriptorsUuidsArray[i].asString()));
 	}
 
-	auto readDescriptorsCallback  = [this, requestMessage, serviceUuid, characteristicUuid, adapterAddress, deviceAddress](BluetoothError error, BluetoothGattDescriptorList descriptorList) {
+	auto readDescriptorsCallback  = [this, requestMessage, serviceUuid, characteristicUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error, BluetoothGattDescriptorList descriptorList) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -3078,9 +3061,9 @@ bool BluetoothGattProfileService::writeDescriptorValue(LSMessage &message)
 	}
 
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
+	auto requestReference = LSUtils::referenceMessage(requestMessage);	// released with the last callback
 
-	auto writeDescriptorCallback  = [requestMessage, serviceUuid, characteristicUuid, descriptorUuid, adapterAddress, deviceAddress](BluetoothError error) {
+	auto writeDescriptorCallback  = [requestMessage, serviceUuid, characteristicUuid, descriptorUuid, adapterAddress, deviceAddress, requestReference](BluetoothError error) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -3157,6 +3140,7 @@ void BluetoothGattProfileService::addLocalService(const BluetoothUuid applicatio
 		if(!addLocalServer(applicationUuid, newServer, adapterAddress))
 		{
 			BT_ERROR("GATT_SERVICE_ALREADY_REGISTERED", 0, "addLocalServer is failed");
+			delete newServer;	// was leaked
 			safe_callback(callback, BLUETOOTH_ERROR_FAIL);
 			return;
 		}
@@ -3209,24 +3193,48 @@ void BluetoothGattProfileService::addLocalService(const BluetoothUuid applicatio
 	newService->desc = service; // TODO: Change to pointer assign
 	newService->addServiceCallback = callback;
 
-	auto addServiceCallback = [this, server, newService, adapterAddress](BluetoothError error, uint16_t serviceId) {
+	// Registered as pending before the SIL call: its callback can run inside it, and deleted the service while
+	// the push_back after the call still added the freed pointer. The steps below hold the server's id, not
+	// the server, as closeServer can delete it meanwhile.
+	uint16_t serverId = server->id;
+	mLocalServices.push_back(newService);
+
+	auto addServiceCallback = [this, serverId, newService, adapterAddress](BluetoothError error, uint16_t serviceId) {
+		if (!isPendingService(newService))
+			return;
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
-			safe_callback(newService->addServiceCallback, error);
-			delete newService;
+			finishPendingService(newService, error);
 			return;
 		}
 
 		BT_INFO("BLE", 0, "add serviceId:%d complete\n", serviceId);
 		newService->id = serviceId;
 		initCharacteristic(newService); // iterator
-		addLocalCharacteristic(server, newService, adapterAddress);
+		addLocalCharacteristic(serverId, newService, adapterAddress);
 	};
-	BT_DEBUG("[%s](%d) getImpl->addService server:%d service:%s\n", __FUNCTION__, __LINE__, server->id, service.getUuid().toString().c_str());
+	BT_DEBUG("[%s](%d) getImpl->addService server:%d service:%s\n", __FUNCTION__, __LINE__, serverId, service.getUuid().toString().c_str());
 	// TODO: Needs server_if, uuid, handles, primary
-	getImpl<BluetoothGattProfile>(adapterAddress)->addService(server->id, service, addServiceCallback);
-	 mLocalServices.push_back(newService);
+	getImpl<BluetoothGattProfile>(adapterAddress)->addService(serverId, service, addServiceCallback);
+}
+
+bool BluetoothGattProfileService::isPendingService(LocalService *service) const
+{
+	return std::find(mLocalServices.begin(), mLocalServices.end(), service) != mLocalServices.end();
+}
+
+// Ends the registration of a service that has not reached its server: it is answered and freed. A failed
+// characteristic or start used to leave the addService call without a reply and the service half registered.
+void BluetoothGattProfileService::finishPendingService(LocalService *service, BluetoothError error)
+{
+	auto pending = std::find(mLocalServices.begin(), mLocalServices.end(), service);
+	if (pending == mLocalServices.end())
+		return;
+
+	mLocalServices.erase(pending);
+	safe_callback(service->addServiceCallback, error);
+	delete service;
 }
 
 void BluetoothGattProfileService::initCharacteristic(LocalService* newService)
@@ -3269,37 +3277,43 @@ bool BluetoothGattProfileService::hasNext(LocalService* newService)
 	return false;
 }
 
-void BluetoothGattProfileService::addLocalCharacteristic(LocalServer* server, LocalService* newService, const std::string &adapterAddress)
+void BluetoothGattProfileService::addLocalCharacteristic(uint16_t serverId, LocalService* newService, const std::string &adapterAddress)
 {
 	BT_DEBUG("[%s](%d) getImpl->addCharacteristic\n", __FUNCTION__, __LINE__);
 	if (newService->descIt == newService->descriptors.end())
 	{
 		auto characteristic = *newService->charIt;
 		getImpl<BluetoothGattProfile>(adapterAddress)->addCharacteristic(
-				server->id,
+				serverId,
 				newService->id,
 				characteristic,
-				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, server, newService, _1, _2, adapterAddress));
+				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, serverId, newService, _1, _2, adapterAddress));
 	}
 	else
 	{
 		auto descriptor = *newService->descIt;
 		getImpl<BluetoothGattProfile>(adapterAddress)->addDescriptor(
-				server->id,
+				serverId,
 				newService->id,
 				descriptor,
-				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, server, newService, _1, _2, adapterAddress));
+				std::bind(&BluetoothGattProfileService::addCharacteristicCallback, this, serverId, newService, _1, _2, adapterAddress));
 	}
 }
 
-void BluetoothGattProfileService::addCharacteristicCallback(LocalServer* server, LocalService* newService, BluetoothError error, uint16_t charId,
+void BluetoothGattProfileService::addCharacteristicCallback(uint16_t serverId, LocalService* newService, BluetoothError error, uint16_t charId,
 	const std::string &adapterAddress)
 {
 	BT_INFO("BLE", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
+	if (!isPendingService(newService))
+		return;
+
 	auto& service = newService->desc;
 
 	if (error != BLUETOOTH_ERROR_NONE)
+	{
+		finishPendingService(newService, error);
 		return;
+	}
 
 	BluetoothUuid itemUuid;
 	BluetoothGattValue itemValue;
@@ -3341,20 +3355,29 @@ void BluetoothGattProfileService::addCharacteristicCallback(LocalServer* server,
 
 	if (hasNext(newService))
 	{
-		addLocalCharacteristic(server, newService, adapterAddress);
+		addLocalCharacteristic(serverId, newService, adapterAddress);
 		return;
 	}
 
-	auto callback = [server, newService](BluetoothError serviceError) {
-		if (serviceError != BLUETOOTH_ERROR_NONE)
+	auto callback = [this, serverId, newService](BluetoothError serviceError) {
+		if (!isPendingService(newService))
 			return;
 
+		LocalServer *server = findLocalServer(serverId);
+		if (serviceError != BLUETOOTH_ERROR_NONE || !server)
+		{
+			finishPendingService(newService, serviceError != BLUETOOTH_ERROR_NONE ? serviceError : BLUETOOTH_ERROR_FAIL);
+			return;
+		}
+
 		BT_INFO("BLE", 0, "startService complete \n");
+		// The server owns it from here.
+		mLocalServices.erase(std::find(mLocalServices.begin(), mLocalServices.end(), newService));
 		server->addLocalService(newService);
 		safe_callback(newService->addServiceCallback, serviceError);
 	};
 
-	getImpl<BluetoothGattProfile>(adapterAddress)->startService(server->id, newService->id, BluetoothGattTransportMode::GATT_TRANSPORT_MODE_LE_BR_EDR , callback);
+	getImpl<BluetoothGattProfile>(adapterAddress)->startService(serverId, newService->id, BluetoothGattTransportMode::GATT_TRANSPORT_MODE_LE_BR_EDR , callback);
 }
 
 bool BluetoothGattProfileService::removeLocalServer(uint16_t serverId, const std::string &adapterAddress)
@@ -3372,10 +3395,12 @@ bool BluetoothGattProfileService::removeLocalServer(uint16_t serverId, const std
 		if(serverIter.second->id == serverId)
 		{
 			BT_DEBUG("[%s](%d) getImpl->removeApplication\n", __FUNCTION__, __LINE__);
-			if(!getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(server->id, ApplicationType::SERVER))
-				server->removeAllLocalService();
-			else
-				delete server;
+			// The server is erased below in both cases, so it and its services are freed in both cases: a
+			// failed removeApplication leaked the server, a successful one its services. No SIL callback holds
+			// them any more; they look the server up by id.
+			getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(server->id, ApplicationType::SERVER);
+			server->removeAllLocalService();
+			delete server;
 
 			mLocalServer.erase(serverIter.first);
 			break;
@@ -3403,8 +3428,11 @@ bool BluetoothGattProfileService::removeLocalService(uint16_t serverId, const Bl
 	if (service == nullptr)
 		return false;
 
-	auto callback = [server, uuid](BluetoothError error) {
-		server->removeLocalService(uuid);
+	// The server is looked up again when the SIL answers: closeServer may have deleted it in between.
+	auto callback = [this, serverId, uuid](BluetoothError /*error*/) {
+		LocalServer *current = findLocalServer(serverId);
+		if (current)
+			current->removeLocalService(uuid);
 	};
 	BT_DEBUG("[%s](%d) getImpl->removeService\n", __FUNCTION__, __LINE__);
 	getImpl<BluetoothGattProfile>(adapterAddress)->removeService(server->id, service->id, callback);
@@ -3429,8 +3457,11 @@ bool BluetoothGattProfileService::removeLocalService(const BluetoothUuid &uuid, 
 		if (service == nullptr)
 			continue;
 
-		auto callback = [server, uuid](BluetoothError error) {
-			server->removeLocalService(uuid);
+		uint16_t serverId = server->id;
+		auto callback = [this, serverId, uuid](BluetoothError /*error*/) {
+			LocalServer *current = findLocalServer(serverId);	// may be gone by now
+			if (current)
+				current->removeLocalService(uuid);
 		};
 		BT_DEBUG("[%s](%d) getImpl->removeService\n", __FUNCTION__, __LINE__);
 		getImpl<BluetoothGattProfile>(adapterAddress)->removeService(serverIter.second->id, service->id, callback);
@@ -4049,22 +4080,66 @@ void BluetoothGattProfileService::writeLocalDescriptor(
 	safe_callback(callback, BLUETOOTH_ERROR_NONE);
 }
 
-void BluetoothGattProfileService::handleConnectClientDisappeared(const uint16_t &clientId, const uint16_t &connectId, const std::string &adapterAddress, const std::string &address)
+// One connect watch per device: a new one replaces the old, whose client is done with the device.
+void BluetoothGattProfileService::storeGattConnectWatch(const std::string &address, LSUtils::ClientWatch *watch)
 {
-	BT_INFO("BLE", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
+	removeGattConnectWatch(address);
+	mConnectWatches[address] = watch;
+}
+
+void BluetoothGattProfileService::removeGattConnectWatch(const std::string &address)
+{
 	auto watchIter = mConnectWatches.find(address);
 	if (watchIter == mConnectWatches.end())
 		return;
 
+	LSUtils::ClientWatch *watch = watchIter->second;
+	mConnectWatches.erase(watchIter);
+	delete watch;	// may be the watch whose callback is running; it is not touched afterwards
+}
+
+// connectedDeviceInfo entries were erased without being freed, and a second insert for an appId leaked the new one.
+void BluetoothGattProfileService::storeConnectedDevice(uint16_t appId, connectedDeviceInfo *info)
+{
+	eraseConnectedDevice(appId);
+	mConnectedDevices[appId] = info;
+}
+
+void BluetoothGattProfileService::eraseConnectedDevice(uint16_t appId)
+{
+	auto deviceIter = mConnectedDevices.find(appId);
+	if (deviceIter == mConnectedDevices.end())
+		return;
+
+	delete deviceIter->second;
+	mConnectedDevices.erase(deviceIter);
+}
+
+void BluetoothGattProfileService::handleConnectClientDisappeared(const uint16_t &clientIdRef, const uint16_t &connectIdRef, const std::string &adapterAddressRef, const std::string &addressRef)
+{
+	BT_INFO("BLE", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
+	// Copies: the arguments live in the watch's bound callback, and the watch goes below.
+	const uint16_t clientId = clientIdRef;
+	const uint16_t connectId = connectIdRef;
+	const std::string adapterAddress = adapterAddressRef;
+	const std::string address = addressRef;
+
+	auto watchIter = mConnectWatches.find(address);
+	if (watchIter == mConnectWatches.end())
+		return;
+	// The client is gone: its watch was kept for good, and fired again for whichever app connected the
+	// device next, disconnecting it under that app.
+	removeGattConnectWatch(address);
+
 	if (!getImpl<BluetoothProfile>(adapterAddress))
 		return;
 
-	auto disconnectCallback = [this, clientId, address, adapterAddress](BluetoothError error) {
+	auto disconnectCallback = [this, clientId, address, adapterAddress](BluetoothError /*error*/) {
 
 		BT_INFO("BLE", 0, "[%s](%d) disconnect from device %s complete\n", __FUNCTION__, __LINE__, address.c_str());
 		markDeviceAsNotConnected(adapterAddress,address);
 		markDeviceAsNotConnecting(adapterAddress,address);
-		mConnectedDevices.erase(clientId);
+		eraseConnectedDevice(clientId);
 		removeSubscriptionPoint(adapterAddress, address);
 		if (mConnectedDevicesMap.find(adapterAddress) != mConnectedDevicesMap.end())
 			mConnectedDevicesMap[adapterAddress].erase(address);
@@ -4125,7 +4200,7 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 				auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 									std::bind(&BluetoothGattProfileService::handleConnectClientDisappeared, this, 0, 0, adapterAddress, address));
 
-				mConnectWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(address, watch));
+				storeGattConnectWatch(address, watch);
 				subscribed = true;
 			}
 			markDeviceAsConnected(adapterAddress,address);
@@ -4136,7 +4211,7 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 				iterDevice->second->setConnectId(connectId);
 			}
 			else
-				mConnectedDevices.insert(std::pair<uint16_t, connectedDeviceInfo*>(appId, new connectedDeviceInfo(address, connectId)));
+				storeConnectedDevice(appId, new connectedDeviceInfo(address, connectId));
 
 			pbnjson::JValue responseObj = pbnjson::Object();
 
@@ -4228,11 +4303,11 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 						auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 											std::bind(&BluetoothGattProfileService::handleConnectClientDisappeared, this, 0, 0, adapterAddress, address));
 
-						mConnectWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(address, watch));
+						storeGattConnectWatch(address, watch);
 						subscribed = true;
 					}
 					markDeviceAsConnected(adapterAddress,address);
-					mConnectedDevices.insert(std::pair<uint16_t, connectedDeviceInfo*>(appId, new connectedDeviceInfo(address, 0)));
+					storeConnectedDevice(appId, new connectedDeviceInfo(address, 0));
 
 					pbnjson::JValue responseObj = pbnjson::Object();
 
@@ -4309,8 +4384,7 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 				subscribed = true;
 			}
 			markDeviceAsConnected(adapterAddress,address);
-			mConnectedDevices.insert(std::pair<uint16_t, connectedDeviceInfo*>
-					(appId, new connectedDeviceInfo(address, connectId)));
+			storeConnectedDevice(appId, new connectedDeviceInfo(address, connectId));
 
 			BT_INFO("BLE", 0, "[%s](%d) device %s connected appId:%d connectId:%d\n",
 						__FUNCTION__, __LINE__, address.c_str(), appId, connectId);
@@ -4325,9 +4399,9 @@ void BluetoothGattProfileService::connectToStack(LS::Message &request, pbnjson::
 
 			LSUtils::postToClient(request, responseObj);
 
-			std::unordered_map<std::string, uint16_t> connMap;
-			connMap[address] = appId;
-			mConnectedDevicesMap[adapterAddress] = connMap;
+			// Add to the adapter's devices: assigning a new one-entry map dropped every other connected
+			// device, whose clientId then stopped working.
+			mConnectedDevicesMap[adapterAddress][address] = appId;
 
 			// We're done with sending out the first response to the client so
 			// no use anymore for the message object
@@ -4408,8 +4482,9 @@ void BluetoothGattProfileService::disconnectToStack(LS::Message &request, pbnjso
 		BT_DEBUG("[%s](%d) getImpl->removeApplication\n", __FUNCTION__, __LINE__);
 		getImpl<BluetoothGattProfile>(adapterAddress)->removeApplication(appId, ApplicationType::CLIENT);
 		removeConnectWatchForDevice(adapterAddress, deviceAddress, true, false);
+		removeGattConnectWatch(deviceAddress);
 		removeSubscriptionPoint(adapterAddress, deviceAddress);
-		mConnectedDevices.erase(appId);
+		eraseConnectedDevice(appId);
 		markDeviceAsNotConnected(adapterAddress,deviceAddress);
 		markDeviceAsNotConnecting(adapterAddress,deviceAddress);
 		LSMessageUnref(request.get());

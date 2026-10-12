@@ -24,6 +24,7 @@
 #include <bluetooth-sil-api.h>
 
 #include "bluetoothpairstate.h"
+#include "bluetoothserviceclasses.h"
 
 namespace LSUtils
 {
@@ -38,7 +39,6 @@ namespace LS
 
 class BluetoothManagerService;
 class BluetoothDevice;
-class BluetoothServiceClassInfo;
 
 class BluetoothManagerAdapter: public BluetoothAdapterStatusObserver
 {
@@ -97,7 +97,7 @@ public:
 	bool setDeviceState(LS::Message &request, pbnjson::JValue &requestObj);
 
 	void handleStatePropertiesSet(BluetoothPropertiesList properties, LS::Message &request, BluetoothError error);
-	void handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, BluetoothDevice *device, LS::Message &request, BluetoothError error);
+	void handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, const std::string &deviceAddress, LS::Message &request, BluetoothError error);
 
 	void cancelIncomingPairingSubscription();
 
@@ -136,6 +136,8 @@ public:
 	void updateSupportedServiceClasses(const std::vector<std::string> uuids);
 
 	void appendFilteringDevices(std::string senderName, pbnjson::JValue &object);
+	void removeFilteringDeviceWatch(const std::string &appName, LSUtils::ClientWatch *only = nullptr,
+	                                bool clearFilters = false);
 	void appendConnectedDevices(pbnjson::JValue &object);
 	void appendPairedDevices(pbnjson::JValue &object);
 	void appendDiscoveredDevice(pbnjson::JValue &object, BluetoothDevice *device);
@@ -158,11 +160,12 @@ public:
 	void notifySubscriberLeDevicesChangedbyScanId(uint32_t scanId, BluetoothDevice *device = NULL);
 
 	void notifyStartScanListenerDropped(uint32_t scanId);
+	void removeStartScan(uint32_t scanId);
 	bool notifyPairingListenerDropped(bool incoming);
 
 	void startPairing(BluetoothDevice *device);
 	void stopPairing();
-	void cancelDiscoveryCallback(BluetoothDevice *device, BluetoothError error);
+	void cancelDiscoveryCallback(const std::string &deviceAddress, BluetoothError error);
 	void beginIncomingPair(const std::string &address);
 
 private:

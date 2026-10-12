@@ -126,7 +126,10 @@ bool BluetoothHidProfileService::getReport(LSMessage &message)
 		std::string reportTypeStr = requestObj["reportType"].asString();
 
 		if (reportTypeStr != "input" && reportTypeStr != "output" && reportTypeStr != "feature")
+		{
 			LSUtils::respondWithError(request, BT_ERR_HID_REPORT_TYPE_INVALID_VALUE_PARAM);
+			return true;
+		}
 
 		reportType = reportTypeStringToEnum(reportTypeStr);
 	}
@@ -234,16 +237,18 @@ bool BluetoothHidProfileService::setReport(LSMessage &message)
 		std::string reportTypeStr = requestObj["reportType"].asString();
 
 		if (reportTypeStr != "input" && reportTypeStr != "output" && reportTypeStr != "feature")
+		{
 			LSUtils::respondWithError(request, BT_ERR_HID_REPORT_TYPE_INVALID_VALUE_PARAM);
+			return true;
+		}
 
 		reportType = reportTypeStringToEnum(reportTypeStr);
 	}
 
 	auto reportDataObjArray = requestObj["reportData"];
-	uint16_t reportSize = reportDataObjArray.arraySize();
-	uint8_t reportData[reportSize];
+	std::vector<uint8_t> reportData(reportDataObjArray.arraySize());
 
-	for (int n = 0; n < reportDataObjArray.arraySize(); n++)
+	for (std::size_t n = 0; n < reportData.size(); n++)
 	{
 		reportData[n] = (uint8_t)reportDataObjArray[n].asNumber<int32_t>();
 	}
@@ -274,7 +279,7 @@ bool BluetoothHidProfileService::setReport(LSMessage &message)
 	};
 
 	BT_INFO("HID", 0, "Service calls SIL API : setReport");
-	getImpl<BluetoothHidProfile>()->setReport(deviceAddress,reportType, reportData, reportSize, setReportCallback);
+	getImpl<BluetoothHidProfile>()->setReport(deviceAddress, reportType, reportData.data(), reportData.size(), setReportCallback);
 
 	return true;
 }
@@ -332,16 +337,15 @@ bool BluetoothHidProfileService::sendData(LSMessage &message)
 	}
 
 	auto dataObjArray = requestObj["reportData"];
-	uint16_t dataSize = dataObjArray.arraySize();
-	uint8_t data[dataSize];
+	std::vector<uint8_t> data(dataObjArray.arraySize());
 
-	for (int n = 0; n < dataObjArray.arraySize(); n++)
+	for (std::size_t n = 0; n < data.size(); n++)
 	{
 		data[n] = (uint8_t)dataObjArray[n].asNumber<int32_t>();
 	}
 
 	BT_INFO("HID", 0, "Service calls SIL API : sendData");
-	BluetoothError error = getImpl<BluetoothHidProfile>()->sendData(deviceAddress, data, dataSize);
+	BluetoothError error = getImpl<BluetoothHidProfile>()->sendData(deviceAddress, data.data(), data.size());
 	BT_INFO("HID", 0, "Return of sendData is %d", error);
 
 	pbnjson::JValue responseObj = pbnjson::Object();

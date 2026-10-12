@@ -16,6 +16,9 @@
 
 
 #include "bluetoothavrcpprofileservice.h"
+#include "avrcpbrowse.h"
+
+#include <algorithm>
 #include "bluetoothmanagerservice.h"
 #include "bluetoothmanageradapter.h"
 #include "bluetoothdevice.h"
@@ -228,6 +231,7 @@ void BluetoothAvrcpProfileService::propertiesChanged(const std::string &adapterA
 	BluetoothProfileService::propertiesChanged(adapterAddress, address, properties);
 
 	bool connected = false;
+	bool connectionChanged = false;
 
 	for (auto prop : properties)
 	{
@@ -235,6 +239,7 @@ void BluetoothAvrcpProfileService::propertiesChanged(const std::string &adapterA
 		{
 			case BluetoothProperty::Type::CONNECTED:
 				connected = prop.getValue<bool>();
+				connectionChanged = true;
 				break;
 
 			default:
@@ -242,7 +247,9 @@ void BluetoothAvrcpProfileService::propertiesChanged(const std::string &adapterA
 		}
 	}
 
-	if(!connected)
+	// Only a disconnection clears the device's state; an update without CONNECTED used to as well. (bluez5
+	// always sends CONNECTED, other SILs need not.)
+	if (connectionChanged && !connected)
 	{
 		auto it = mRemoteVolumes.find(address);
 		if (it != mRemoteVolumes.end())
@@ -420,8 +427,10 @@ bool BluetoothAvrcpProfileService::supplyMediaMetaData(LSMessage &message)
 
 	BT_INFO("AVRCP", 0, "Service calls SIL API : supplyMediaMetaData");
 	getImpl<BluetoothAvrcpProfile>(adapterAddress)->supplyMediaMetaData(requestId, metaData, requestCallback);
-	deleteMediaRequest(true, requestIdStr, adapterAddress);
+	// The id first: it is found through the request, which deleting the request first made impossible, so
+	// the id of the request at index 0 was erased instead and this one leaked.
 	deleteMediaRequestId(true, requestIdStr, adapterAddress);
+	deleteMediaRequest(true, requestIdStr, adapterAddress);
 
 	return true;
 }
@@ -515,7 +524,7 @@ bool BluetoothAvrcpProfileService::supplyMediaPlayStatus(LSMessage &message)
 	}
 
 	BluetoothProfile *impl = findImpl(adapterAddress);
-	if (!impl && getImpl<BluetoothAvrcpProfile>(adapterAddress))
+	if (!impl && !getImpl<BluetoothAvrcpProfile>(adapterAddress))	// the second test was inverted
 	{
 		LSUtils::respondWithError(request, BT_ERR_PROFILE_UNAVAIL);
 		return true;
@@ -550,8 +559,10 @@ bool BluetoothAvrcpProfileService::supplyMediaPlayStatus(LSMessage &message)
 
 	BT_INFO("AVRCP", 0, "Service calls SIL API : supplyMediaPlayStatus");
 	getImpl<BluetoothAvrcpProfile>(adapterAddress)->supplyMediaPlayStatus(requestId, playStatus, requestCallback);
-	deleteMediaRequest(false, requestIdStr, adapterAddress);
+	// The id first: it is found through the request, which deleting the request first made impossible, so
+	// the id of the request at index 0 was erased instead and this one leaked.
 	deleteMediaRequestId(false, requestIdStr, adapterAddress);
+	deleteMediaRequest(false, requestIdStr, adapterAddress);
 
 	return true;
 }
@@ -960,7 +971,7 @@ void BluetoothAvrcpProfileService::playerApplicationSettingsReceived(const Bluet
 	}
 }
 
-void BluetoothAvrcpProfileService::handlePlayserApplicationSettingsPropertiesSet(BluetoothPlayerApplicationSettingsPropertiesList properties, LS::Message &request, std::string &adapterAddress, std::string &address, BluetoothError error)
+void BluetoothAvrcpProfileService::handlePlayserApplicationSettingsPropertiesSet(BluetoothPlayerApplicationSettingsPropertiesList /*properties*/, LS::Message &request, std::string &adapterAddress, std::string &address, BluetoothError error)
 {
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
@@ -1114,8 +1125,16 @@ bool BluetoothAvrcpProfileService::setPlayerApplicationSettings(LSMessage &messa
 	}
 	else
 	{
+		// The availability check at the top passes when any adapter has the profile; this one may not.
+		BluetoothAvrcpProfile *avrcp = getImpl<BluetoothAvrcpProfile>(adapterAddress);
+		if (!avrcp)
+		{
+			LSUtils::respondWithError(request, BT_ERR_PROFILE_UNAVAIL);
+			return true;
+		}
+
 		BT_INFO("AVRCP", 0, "Service calls SIL API : setPlayerApplicationSettingsProperties");
-		getImpl<BluetoothAvrcpProfile>(adapterAddress)->
+		avrcp->
 			setPlayerApplicationSettingsProperties(propertiesToChange,
 					std::bind(&BluetoothAvrcpProfileService::handlePlayserApplicationSettingsPropertiesSet,
 						this, propertiesToChange, request, adapterAddress, deviceAddress, _1));
@@ -1306,7 +1325,8 @@ bool BluetoothAvrcpProfileService::getRemoteVolume(LSMessage &message)
 		pbnjson::JValue connectedDeviceResponseObj = pbnjson::Object();
 
 		auto adapterInfo = getManager()->findAdapterInfo(adapterAddress);
-		for (auto deviceIter : adapterInfo->getDevices())
+		auto devices = adapterInfo ? adapterInfo->getDevices() : std::unordered_map<std::string, BluetoothDevice*>();
+		for (auto deviceIter : devices)
 		{
 			auto device = deviceIter.second;
 
@@ -1317,7 +1337,10 @@ bool BluetoothAvrcpProfileService::getRemoteVolume(LSMessage &message)
 				connectedDeviceResponseObj.put("subscribed", subscribed);
 				connectedDeviceResponseObj.put("adapterAddress", adapterAddress);
 				connectedDeviceResponseObj.put("address", device->getAddress());
-				connectedDeviceResponseObj.put("volume", mRemoteVolumes[device->getAddress()]);
+				// find(), not operator[]: that stored a volume of 0 for every device asked about.
+				auto volume = mRemoteVolumes.find(device->getAddress());
+				if (volume != mRemoteVolumes.end())
+					connectedDeviceResponseObj.put("volume", volume->second);
 				LSUtils::postToClient(request, connectedDeviceResponseObj);
 				isAnyDeviceConnected = true;
 			}
@@ -1327,6 +1350,11 @@ bool BluetoothAvrcpProfileService::getRemoteVolume(LSMessage &message)
 		if (!isAnyDeviceConnected)
 		{
 			BT_DEBUG("AVRCP: There is no AVRCP connected device : [%s : %d]", __FUNCTION__, __LINE__);
+			// The call failed, so its subscription ends: the watch used to stay, and later volume changes were
+			// posted as returnValue:true to a call that had been answered with an error.
+			if (subscribed && !mGetConnectedDevicesRemoteVolumeWatchesForMultipleAdapters.empty())
+				removeClientWatch(&mGetConnectedDevicesRemoteVolumeWatchesForMultipleAdapters,
+				                  mGetConnectedDevicesRemoteVolumeWatchesForMultipleAdapters.back());
 			LSUtils::respondWithError(request, BT_ERR_AVRCP_NO_CONNECTED_DEVICES);
 			return true;
 		}
@@ -1499,9 +1527,10 @@ bool BluetoothAvrcpProfileService::addClientWatch(LS::Message& request, std::lis
 			return false;
 		}
 	}
-	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(),
-		std::bind(&BluetoothAvrcpProfileService::handleClientDisappeared,
-			this, clientWatch, senderName), adapterAddress, deviceAddress);
+	// The callback removes this watch only. It removed every watch of the same application, so cancelling
+	// one subscription (say, for device A) silently ended the app's others (device B).
+	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(), nullptr, adapterAddress, deviceAddress);
+	watch->setCallback(std::bind(&BluetoothAvrcpProfileService::handleClientDisappeared, this, clientWatch, watch));
 	clientWatch->push_back(watch);
 	return true;
 }
@@ -1733,33 +1762,14 @@ std::vector<std::string>* BluetoothAvrcpProfileService::findRemoteFeatures(const
 	return features;
 }
 
-void BluetoothAvrcpProfileService::removeClientWatch(std::list<BluetoothClientWatch*> *clientWatch, const std::string& senderName)
+void BluetoothAvrcpProfileService::removeClientWatch(std::list<BluetoothClientWatch*> *clientWatch, BluetoothClientWatch *watch)
 {
-	auto watch = clientWatch->begin();
-	while (watch != clientWatch->end())
-	{
+	auto found = std::find(clientWatch->begin(), clientWatch->end(), watch);
+	if (found == clientWatch->end())
+		return;
 
-		const char* senderNameWatch = LSMessageGetApplicationID((*watch)->getMessage());
-		if (senderNameWatch == NULL)
-		{
-			senderNameWatch = LSMessageGetSenderServiceName((*watch)->getMessage());
-			if (senderNameWatch == NULL)
-			{
-				return;
-			}
-		}
-
-		if (senderName == senderNameWatch)
-		{
-			auto watchToRemove = watch;
-			delete (*watchToRemove);
-			watch = clientWatch->erase(watch);
-		}
-		else
-		{
-			++watch;
-		}
-	}
+	clientWatch->erase(found);
+	delete watch;	// may be the watch whose callback is running; it is not touched afterwards
 }
 
 void BluetoothAvrcpProfileService::removeReceivePassThroughCommandWatchForDevice(const std::string &address)
@@ -1784,9 +1794,9 @@ void BluetoothAvrcpProfileService::removeReceivePassThroughCommandWatchForDevice
 	delete watch;
 }
 
-void BluetoothAvrcpProfileService::handleClientDisappeared(std::list<BluetoothClientWatch*>* clientWatch, const std::string senderName)
+void BluetoothAvrcpProfileService::handleClientDisappeared(std::list<BluetoothClientWatch*>* clientWatch, BluetoothClientWatch *watch)
 {
-	removeClientWatch(clientWatch, senderName);
+	removeClientWatch(clientWatch, watch);
 }
 
 void BluetoothAvrcpProfileService::removeGetSupportedNotificationEventsWatchForDevice(const std::string &address)
@@ -2112,7 +2122,7 @@ void BluetoothAvrcpProfileService::passThroughCommandReceived(BluetoothAvrcpPass
 /*
  * This will be deprecated on implementation of remoteFeaturesReceived with role.
  */
-void BluetoothAvrcpProfileService::remoteFeaturesReceived(BluetoothAvrcpRemoteFeatures features, const std::string &address)
+void BluetoothAvrcpProfileService::remoteFeaturesReceived(BluetoothAvrcpRemoteFeatures /*features*/, const std::string &/*address*/)
 {
 
 }
@@ -2296,6 +2306,14 @@ void BluetoothAvrcpProfileService::createMediaRequest(
 
 	assignRequestId(request);
 
+	// Ids wrap at 999 and unanswered requests were never dropped, so a new request could share its id with a
+	// stale one, which every lookup found first. The stale one goes.
+	if (findMediaRequest(metaData, request->requestId, adapterAddress))
+	{
+		deleteMediaRequestId(metaData, request->requestId, adapterAddress);
+		deleteMediaRequest(metaData, request->requestId, adapterAddress);
+	}
+
     std::map<std::string, MediaRequest*> mediaRequest;
 	mediaRequest.insert(std::pair<std::string, MediaRequest*> (adapterAddress, request));
 	std::map<std::string, BluetoothAvrcpRequestId> mediaRequestId;
@@ -2346,6 +2364,13 @@ void BluetoothAvrcpProfileService::createMediaRequest(bool metaData, uint64_t re
 
 	assignRequestId(request);
 
+	// As above: a stale request holding the same id goes.
+	if (findMediaRequest(metaData, request->requestId))
+	{
+		deleteMediaRequestId(metaData, request->requestId);
+		deleteMediaRequest(metaData, request->requestId);
+	}
+
 	if (metaData)
 	{
 		mMediaMetaDataRequests.insert(std::pair<uint64_t, MediaRequest*>(mRequestIndex, request));
@@ -2371,7 +2396,11 @@ void BluetoothAvrcpProfileService::createMediaRequest(bool metaData, uint64_t re
 }
 
 void BluetoothAvrcpProfileService::deleteMediaRequestId(bool metaData, const std::string &requestIdStr)
-{
+{	// getRequestIndex() answers 0, a valid index, for a request it does not know.
+	if (!findMediaRequest(metaData, requestIdStr))
+		return;
+
+
 	uint64_t requestIndex = getRequestIndex(metaData, requestIdStr);
 	if (metaData)
 	{
@@ -2399,6 +2428,10 @@ void BluetoothAvrcpProfileService::deleteMediaRequestId(
 	{
 		requests = &mMediaPlayStatusRequestIdsMultiAdapters;
 	}
+	// getRequestIndex() answers 0, a valid index, for a request it does not know.
+	if (!findMediaRequest(metaData, requestIdStr, adapterAddress))
+		return;
+
 	uint64_t requestIndex = getRequestIndex(metaData, requestIdStr, adapterAddress);
 	auto idIter = requests->find(requestIndex);
 	if (idIter != requests->end())
@@ -2626,7 +2659,10 @@ void BluetoothAvrcpProfileService::notifyConfirmationRequest(LS::Message &reques
 	pbnjson::JValue responseObj = pbnjson::Object();
 	if (!success)
 	{
+		// One reply: a second one with returnValue false used to follow the error.
 		LSUtils::respondWithError(request, BT_ERR_AVRCP_STATE_ERR);
+		LSMessageUnref(request.get());
+		return;
 	}
 
 	responseObj.put("returnValue", success);
@@ -3124,6 +3160,7 @@ bool BluetoothAvrcpProfileService::getNumberOfItems(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -3195,6 +3232,7 @@ bool BluetoothAvrcpProfileService::getFolderItems(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -3253,6 +3291,32 @@ std::string BluetoothAvrcpProfileService::folderItemTypeEnumToString(BluetoothAv
 	}
 }
 
+// The device answers ChangeFolder and Play over AVRCP, possibly seconds later: the caller is answered with that
+// result, not as soon as the SIL has sent the request (a refused folder change or play looked done).
+static void sendBrowseRequest(LS::Message &request, AvrcpBrowseRequest browseRequest, BluetoothAvrcpProfile *impl,
+							  const std::string &itemPath, const std::string &adapterAddress,
+							  const std::string &deviceAddress)
+{
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+	sendAvrcpBrowseRequest(impl, browseRequest, itemPath,
+		[requestMessage, adapterAddress, deviceAddress](BluetoothError error) {
+			if (BLUETOOTH_ERROR_NONE != error)
+			{
+				LSUtils::respondWithError(requestMessage, error);
+				LSMessageUnref(requestMessage);
+				return;
+			}
+			pbnjson::JValue responseObj = pbnjson::Object();
+
+			responseObj.put("adapterAddress", adapterAddress);
+			responseObj.put("address", deviceAddress);
+			responseObj.put("returnValue", true);
+			LSUtils::postToClient(requestMessage, responseObj);
+			LSMessageUnref(requestMessage);
+		});
+}
+
 bool BluetoothAvrcpProfileService::changePath(LSMessage &message)
 {
 	BT_INFO("AVRCP", 0, "Luna API is called : [%s : %d]", __FUNCTION__, __LINE__);
@@ -3297,20 +3361,8 @@ bool BluetoothAvrcpProfileService::changePath(LSMessage &message)
 		return true;
 	}
 
-	BluetoothError error = impl->changePath(requestObj["itemPath"].asString());
-	if (BLUETOOTH_ERROR_NONE != error)
-	{
-		LSUtils::respondWithError(request, error);
-		return true;
-	}
-
-	pbnjson::JValue responseObj = pbnjson::Object();
-
-	responseObj.put("adapterAddress", adapterAddress);
-	responseObj.put("address", deviceAddress);
-	responseObj.put("returnValue", true);
-	LSUtils::postToClient(request, responseObj);
-
+	sendBrowseRequest(request, AvrcpBrowseRequest::CHANGE_PATH, impl, requestObj["itemPath"].asString(),
+					  adapterAddress, deviceAddress);
 	return true;
 }
 
@@ -3359,19 +3411,8 @@ bool BluetoothAvrcpProfileService::playItem(LSMessage &message)
 		return true;
 	}
 
-	BluetoothError error = impl->playItem(requestObj["itemPath"].asString());
-	if (BLUETOOTH_ERROR_NONE != error)
-	{
-		LSUtils::respondWithError(request, error);
-		return true;
-	}
-	pbnjson::JValue responseObj = pbnjson::Object();
-
-	responseObj.put("adapterAddress", adapterAddress);
-	responseObj.put("address", deviceAddress);
-	responseObj.put("returnValue", true);
-	LSUtils::postToClient(request, responseObj);
-
+	sendBrowseRequest(request, AvrcpBrowseRequest::PLAY_ITEM, impl, requestObj["itemPath"].asString(),
+					  adapterAddress, deviceAddress);
 	return true;
 }
 
@@ -3487,6 +3528,7 @@ bool BluetoothAvrcpProfileService::search(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 		pbnjson::JValue responseObj = pbnjson::Object();
@@ -3567,6 +3609,7 @@ bool BluetoothAvrcpProfileService::notifyMediaPlayStatus(LSMessage &message)
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
 			LSUtils::respondWithError(requestMessage, error);
+			LSMessageUnref(requestMessage);	// leaked on every SIL error
 			return;
 		}
 

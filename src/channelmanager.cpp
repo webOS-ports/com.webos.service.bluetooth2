@@ -54,7 +54,10 @@ ChannelManager::~ChannelManager()
 		{
 			QueueData *queue = channelInfo->receiveQueue.front();
 			if (queue)
+			{
+				delete[] queue->data;	// leaked here before
 				delete queue;
+			}
 
 			channelInfo->receiveQueue.pop();
 		}
@@ -68,7 +71,7 @@ ChannelManager::~ChannelManager()
 		if (NULL == dataInfo)
 			continue;
 
-		delete dataInfo;
+		destroyReadDataInfo(dataInfo);
 	}
 	mReadDataSubscriptions.clear();
 
@@ -78,10 +81,15 @@ ChannelManager::~ChannelManager()
 		if (NULL == channelInfo)
 			continue;
 
+		delete channelInfo->watch;
 		delete channelInfo;
 	}
 	mCreateChannelSubscriptons.clear();
 	mConnectingChannels.clear();
+
+	for (guint source : mPendingNotifications)
+		g_source_remove(source);
+	mPendingNotifications.clear();
 
 
 }
@@ -135,7 +143,7 @@ void ChannelManager::makeDataBuffer(ChannelInfo *channelInfo)
 				memcpy(channelInfo->dataBuffer.buffer + channelInfo->dataBuffer.size, queue->data, queue->size);
 				channelInfo->dataBuffer.size += queue->size;
 
-				delete queue->data;
+				delete[] queue->data;	// allocated with new[]
 			}
 			delete queue;
 		}
@@ -163,6 +171,14 @@ void ChannelManager::postToReadDataSubscriber(const uint8_t *data, const uint32_
 	g_free(gdata);
 }
 
+void ChannelManager::destroyReadDataInfo(ReadDataInfo *dataInfo)
+{
+	if (dataInfo->timeoutSource)
+		g_source_remove(dataInfo->timeoutSource);
+	delete dataInfo->watch;	// may be the watch whose callback is running; it is not touched afterwards
+	delete dataInfo;
+}
+
 void ChannelManager::deleteReadDataSubscription(const void *readData)
 {
 	for (auto itMap = mReadDataSubscriptions.begin(); itMap != mReadDataSubscriptions.end(); itMap++)
@@ -172,8 +188,8 @@ void ChannelManager::deleteReadDataSubscription(const void *readData)
 		{
 			BT_DEBUG("[deleteReadDataSubscription] channelId:%s", dataInfo->userChannelId.c_str());
 
-			delete dataInfo;
 			mReadDataSubscriptions.erase(itMap);
+			destroyReadDataInfo(dataInfo);
 			break;
 		}
 	}
@@ -395,12 +411,11 @@ std::string ChannelManager::markChannelAsNotConnected(const BluetoothSppChannelI
 			LSUtils::postToClient(dataInfo->watch->getMessage(), responseObj);
 
 			appName = dataInfo->appName;
-			mReadDataSubscriptions.erase(itMap);
-
 			BT_DEBUG("[markChannelAsNotConnected] delete readsubscription(appName:%s, channelId:%s)",
 			        appName.c_str(), dataInfo->userChannelId.c_str());
 
-			delete dataInfo;
+			itMap = mReadDataSubscriptions.erase(itMap);	// the iterator was reused after erase
+			destroyReadDataInfo(dataInfo);
 			continue;
 		}
 
@@ -445,8 +460,8 @@ std::string ChannelManager::markChannelAsNotConnected(const BluetoothSppChannelI
 			responseObj.put("subscribed", false);
 			LSUtils::postToClient(dataInfo->watch->getMessage(), responseObj);
 
-			mReadDataSubscriptions.erase(itMap);
-			delete dataInfo;
+			itMap = mReadDataSubscriptions.erase(itMap);
+			destroyReadDataInfo(dataInfo);
 			continue;
 		}
 
@@ -501,11 +516,15 @@ std::string ChannelManager::getCreateChannelAppName(const std::string &uuid)
 void ChannelManager::addCreateChannelSubscripton(const std::string &uuid, LSUtils::ClientWatch *watch,
         LSMessage *message)
 {
+	// A new subscription for a uuid replaces the old one. The insert used to fail silently and leak the new
+	// one, whose watch stayed armed and later removed the channel of whoever held the uuid by then.
+	deleteCreateChannelSubscription(uuid);
+
 	CreateChannelInfo *createChannelInfo = new CreateChannelInfo();
 	createChannelInfo->appName = getMessageOwner(message);
 	createChannelInfo->watch = watch;
 
-	mCreateChannelSubscriptons.insert(std::pair<std::string, CreateChannelInfo *>(uuid, createChannelInfo));
+	mCreateChannelSubscriptons[uuid] = createChannelInfo;
 }
 
 void ChannelManager::deleteCreateChannelSubscription(const std::string &uuid)
@@ -518,7 +537,11 @@ void ChannelManager::deleteCreateChannelSubscription(const std::string &uuid)
 	mCreateChannelSubscriptons.erase(findIter);
 
 	if (channelInfo)
+	{
+		// Its watch went with it nowhere before; this may be the watch whose callback is running.
+		delete channelInfo->watch;
 		delete channelInfo;
+	}
 }
 
 const ChannelManager::DataBuffer *ChannelManager::getChannelBufferData(std::string &channelId, const std::string &appName)
@@ -596,23 +619,24 @@ void ChannelManager::addReceiveQueue(const std::string &adapterAddress, const Bl
 		if (NULL == userData)
 			return FALSE;
 
+		// This source ends when the callback returns FALSE; its data is freed by the destroy notify.
 		ChannelManager *manager = userData->manager;
-		BluetoothSppChannelId channelId = userData->channelId;
-		std::string adapterAddress = userData->adapterAddress;
-		g_source_remove(userData->eventSourceId);
-		delete userData;
-
-		manager->notifyReceivedData(adapterAddress, channelId);
+		manager->mPendingNotifications.erase(userData->eventSourceId);
+		manager->notifyReceivedData(userData->adapterAddress, userData->channelId);
 
 		return FALSE;
 	};
 
+	// The manager keeps the ids of its pending notifications and removes them when it is deleted, so it can be
+	// deleted (an adapter going away) without one of them running on it afterwards.
 	DataReceivedInfo *userData = new DataReceivedInfo();
 	userData->channelId = channelId;
 	userData->manager = this;
 	userData->adapterAddress = adapterAddress;
-	guint eventSourceId = g_idle_add(dataReceivedCallback, (gpointer)userData);
+	guint eventSourceId = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, dataReceivedCallback, (gpointer)userData,
+	                                      [](gpointer data) { delete static_cast<DataReceivedInfo *>(data); });
 	userData->eventSourceId = eventSourceId;
+	mPendingNotifications.insert(eventSourceId);
 }
 
 void *ChannelManager::addReadDataSubscription(const std::string &channelId, const int timeout, LSUtils::ClientWatch *watch,
@@ -620,6 +644,7 @@ void *ChannelManager::addReadDataSubscription(const std::string &channelId, cons
 {
 	ReadDataInfo *readDataInfo = new ReadDataInfo();
 	readDataInfo->timeout = timeout;
+	readDataInfo->timeoutSource = 0;
 	readDataInfo->watch = watch;
 	readDataInfo->userChannelId = channelId;
 	readDataInfo->stackChannelId = getStackChannelId(channelId);
@@ -630,17 +655,13 @@ void *ChannelManager::addReadDataSubscription(const std::string &channelId, cons
 
 	auto timeoutExpiredCallback = [] (gpointer user_data) -> gboolean {
 		TimeoutInfo *userData = (TimeoutInfo *)user_data;
-		if (NULL == userData)
-			return FALSE;
+		ReadDataInfo *dataInfo = static_cast<ReadDataInfo *>(userData->readDataInfo);
 
-		ChannelManager *manager = userData->manager;
-		g_source_remove(userData->eventSourceId);
-		void *readDataInfo = userData->readDataInfo;
-		delete userData;
+		BT_DEBUG("[timeoutExpired] readDataInfo:%p", (void *)dataInfo);
 
-		BT_DEBUG("[timeoutExpired] readDataInfo:%p", readDataInfo);
-
-		manager->deleteReadDataSubscription(readDataInfo);
+		// This source ends when the callback returns FALSE; destroyReadDataInfo must not remove it.
+		dataInfo->timeoutSource = 0;
+		userData->manager->deleteReadDataSubscription(dataInfo);
 
 		return FALSE;
 	};
@@ -650,8 +671,8 @@ void *ChannelManager::addReadDataSubscription(const std::string &channelId, cons
 		TimeoutInfo *userData = new TimeoutInfo();
 		userData->manager = this;
 		userData->readDataInfo = (void *)readDataInfo;
-		guint eventSourceId = g_timeout_add_seconds(timeout, timeoutExpiredCallback, (gpointer)userData);
-		userData->eventSourceId = eventSourceId;
+		readDataInfo->timeoutSource = g_timeout_add_seconds_full(G_PRIORITY_DEFAULT, timeout, timeoutExpiredCallback,
+		        userData, [](gpointer data) { delete static_cast<TimeoutInfo *>(data); });
 	}
 
 	return readDataInfo;

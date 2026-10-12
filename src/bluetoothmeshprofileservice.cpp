@@ -15,6 +15,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bluetoothmeshprofileservice.h"
+
+#include <algorithm>
+#include <cinttypes>
+
 #include "bluetoothmanagerservice.h"
 #include "bluetoothmanageradapter.h"
 #include "bluetoothdevice.h"
@@ -183,7 +187,10 @@ void BluetoothMeshProfileService::initialize(const std::string &adapterAddress)
 				}
 			}
 		}
-		getImpl<BluetoothMeshProfile>(adapterAddress)->updateNodeInfo("PB-ADV", unicastAddresses);
+		// The adapter may not offer the profile; the check above uses another lookup.
+		BluetoothMeshProfile *mesh = getImpl<BluetoothMeshProfile>(adapterAddress);
+		if (mesh)
+			mesh->updateNodeInfo("PB-ADV", unicastAddresses);
 	}
 }
 
@@ -222,18 +229,18 @@ bool BluetoothMeshProfileService::addClientWatch(LS::Message &request, std::list
 			return false;
 		}
 	}
-	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(),
-										  std::bind(&BluetoothMeshProfileService::handleClientDisappeared,
-													this, clientWatch, senderName),
-										  adapterAddress, deviceAddress);
+	// The callback removes this watch only. It removed every watch of the same application, so cancelling one
+	// of an app's subscriptions silently ended the others too.
+	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(), nullptr, adapterAddress, deviceAddress);
+	watch->setCallback(std::bind(&BluetoothMeshProfileService::handleClientDisappeared, this, clientWatch, watch));
 	clientWatch->push_back(watch);
 	return true;
 }
 
 void BluetoothMeshProfileService::handleClientDisappeared(std::list<BluetoothClientWatch *> *clientWatch,
-														  const std::string senderName)
+														  BluetoothClientWatch *watch)
 {
-	removeClientWatch(clientWatch, senderName);
+	removeClientWatch(clientWatch, watch);
 }
 
 void BluetoothMeshProfileService::handleKeyRefreshClientDisappeared(
@@ -250,33 +257,14 @@ void BluetoothMeshProfileService::handleKeyRefreshClientDisappeared(
 }
 
 void BluetoothMeshProfileService::removeClientWatch(std::list<BluetoothClientWatch *> *clientWatch,
-													const std::string &senderName)
+													BluetoothClientWatch *watch)
 {
-	auto watch = clientWatch->begin();
-	while (watch != clientWatch->end())
-	{
+	auto found = std::find(clientWatch->begin(), clientWatch->end(), watch);
+	if (found == clientWatch->end())
+		return;
 
-		const char *senderNameWatch = LSMessageGetApplicationID((*watch)->getMessage());
-		if (senderNameWatch == NULL)
-		{
-			senderNameWatch = LSMessageGetSenderServiceName((*watch)->getMessage());
-			if (senderNameWatch == NULL)
-			{
-				return;
-			}
-		}
-
-		if (senderName == senderNameWatch)
-		{
-			auto watchToRemove = watch;
-			delete (*watchToRemove);
-			watch = clientWatch->erase(watch);
-		}
-		else
-		{
-			++watch;
-		}
-	}
+	clientWatch->erase(found);
+	delete watch;	// may be the watch whose callback is running; it is not touched afterwards
 }
 
 bool BluetoothMeshProfileService::scanUnprovisionedDevices(LSMessage &message)
@@ -401,8 +389,12 @@ void BluetoothMeshProfileService::modelConfigResult(const std::string &adapterAd
 		{
 			if (BLUETOOTH_ERROR_NONE != error)
 			{
+				// Ended like a success: the watch stayed, and the next result for the same node and config
+				// went to this finished call instead of the one waiting for it.
 				LSUtils::respondWithError((*watch)->getMessage(), error, true);
-				return;
+				delete (*watch);
+				watch = mModelConfigResultWatch.erase(watch);
+				continue;
 			}
 			pbnjson::JValue object = pbnjson::Object();
 			object.put("subscribed", true);
@@ -472,14 +464,14 @@ pbnjson::JValue BluetoothMeshProfileService::appendCompositionData(BleMeshCompos
 
 	pbnjson::JValue elementsObjectArr = pbnjson::Array();
 	std::vector<BleMeshElement> elements = compositionData.getElements();
-	for (auto i = 0; i < elements.size(); ++i)
+	for (std::size_t i = 0; i < elements.size(); ++i)
 	{
 		pbnjson::JValue elementobject = pbnjson::Object();
 		elementobject.put("loc", elements[i].getLoc());
 		elementobject.put("numS",  elements[i].getNumS());
 		std::vector<uint32_t> sigModelIds = elements[i].getSigModelIds();
 		pbnjson::JValue sigModIdsArray = pbnjson::Array();
-		for (auto j = 0; j < sigModelIds.size(); ++j)
+		for (std::size_t j = 0; j < sigModelIds.size(); ++j)
 		{
 			sigModIdsArray.append((int32_t)(sigModelIds[j]));
 		}
@@ -487,7 +479,7 @@ pbnjson::JValue BluetoothMeshProfileService::appendCompositionData(BleMeshCompos
 		elementobject.put("numV",  elements[i].getNumV());
 		std::vector<uint32_t> vendorModelIds = elements[i].getVendorModelIds();
 		pbnjson::JValue vendorModIdsArray = pbnjson::Array();
-		for (auto k = 0; k < vendorModelIds.size(); ++k)
+		for (std::size_t k = 0; k < vendorModelIds.size(); ++k)
 		{
 			vendorModIdsArray.append((int32_t)(vendorModelIds[k]));
 		}
@@ -520,7 +512,7 @@ pbnjson::JValue BluetoothMeshProfileService::appendAppKeyIndexes(std::vector<uin
 void BluetoothMeshProfileService::scanResult(const std::string &adapterAddress,
 											 const int16_t rssi, const std::string &uuid, const std::string &name)
 {
-	BT_INFO("MESH", 0, "[%s : %d], num_watch: %d", __FUNCTION__, __LINE__, mScanResultWatch.size());
+	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mScanResultWatch.size());
 	for (auto watch : mScanResultWatch)
 	{
 		BT_INFO("MESH", 0, "AdapterAddress: %s --- %s", adapterAddress.c_str(), watch->getAdapterAddress().c_str());
@@ -724,8 +716,9 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 	{
 		BT_INFO("MESH", 0, "network already exists, token : %s: [%s : %d]", meshToken.c_str(),
 				 __FUNCTION__, __LINE__);
-		mNetworkCreated = true;
-		impl->attach("PB-ADV", meshToken);
+		// Only when the attach started (meshd may not run yet): a call made later tries again. One that fails
+		// later comes back through attachResult.
+		mNetworkCreated = impl->attach("PB-ADV", meshToken) == BLUETOOTH_ERROR_NONE;
 		LSUtils::respondWithError(request, BLUETOOTH_ERROR_MESH_NETWORK_EXISTS);
 		return true;
 	}
@@ -737,6 +730,7 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 		LSUtils::respondWithError(request, BT_ERR_MESSAGE_OWNER_MISSING);
 		return true;
 	}
+	BluetoothClientWatch *watch = mNetworkIdWatch.back();
 	std::string bearer = "PB-ADV"; // default value
 
 	if (requestObj.hasKey("bearer"))
@@ -745,6 +739,8 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 	BluetoothError error = impl->createNetwork(bearer);
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
+		// The watch added above stayed, and got the network id of a later createNetwork.
+		removeClientWatch(&mNetworkIdWatch, watch);
 		LSUtils::respondWithError(request, error);
 		return true;
 	}
@@ -757,7 +753,7 @@ bool BluetoothMeshProfileService::createNetwork(LSMessage &message)
 void BluetoothMeshProfileService::updateNetworkId(const std::string &adapterAddress,
 											 const uint64_t networkId)
 {
-	BT_INFO("MESH", 0, "[%s : %d], num_watch: %d", __FUNCTION__, __LINE__, mNetworkIdWatch.size());
+	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mNetworkIdWatch.size());
 	for (auto watch : mNetworkIdWatch)
 	{
 		BT_INFO("MESH", 0, "AdapterAddress: %s --- %s", adapterAddress.c_str(), watch->getAdapterAddress().c_str());
@@ -766,7 +762,7 @@ void BluetoothMeshProfileService::updateNetworkId(const std::string &adapterAddr
 			pbnjson::JValue object = pbnjson::Object();
 			object.put("returnValue", true);
 			object.put("adapterAddress", adapterAddress);
-			BT_INFO("MESH", 0, "networkId : [%s : %llu]", __FUNCTION__, networkId);
+			BT_INFO("MESH", 0, "networkId : [%s : %" PRIu64 "]", __FUNCTION__, networkId);
 			std::string networkID = std::to_string(networkId);
 			object.put("networkId", networkID);
 			if (!LSUtils::callDb8MeshSetToken(getManager(), networkID))
@@ -782,6 +778,58 @@ void BluetoothMeshProfileService::updateNetworkId(const std::string &adapterAddr
 
 		}
 	}
+}
+
+// The stack refused the network createNetwork started, or the local node could not be attached to it: the network
+// is not usable, and the createNetwork callers waiting for its id (or holding it) get the error. They were told
+// nothing, and the service took the network for created, so a new createNetwork was refused as NETWORK_EXISTS.
+void BluetoothMeshProfileService::networkFailed(BluetoothError error, const std::string &adapterAddress)
+{
+	mNetworkCreated = false;
+	auto watch = mNetworkIdWatch.begin();
+	while (watch != mNetworkIdWatch.end())
+	{
+		if (convertToLower(adapterAddress) != convertToLower((*watch)->getAdapterAddress()))
+		{
+			++watch;
+			continue;
+		}
+		LSUtils::respondWithError((*watch)->getMessage(), error, true);
+		delete (*watch);
+		watch = mNetworkIdWatch.erase(watch);
+	}
+}
+
+void BluetoothMeshProfileService::createNetworkResult(BluetoothError error, const std::string &adapterAddress)
+{
+	BT_INFO("MESH", 0, "[%s : %d], error: %d", __FUNCTION__, __LINE__, error);
+	if (BLUETOOTH_ERROR_NONE != error)	// on success, updateNetworkId follows with the id
+		networkFailed(error, adapterAddress);
+}
+
+// MESH_NODE_NOT_AVAILABLE: the stack knows no node for the stored token (meshd lost its storage, or the network
+// was made on another device), so the network is gone for good. Its records are dropped, and the next createNetwork
+// makes a new one: before, the token stayed in the database, every createNetwork answered NETWORK_EXISTS and tried
+// the same failing attach, and nothing could remove it. Any other failure (the stack not running, no answer, busy)
+// may pass, and keeps the network.
+// An attach that worked makes the network usable, also one the SIL made by itself when the stack came back after a
+// createNetwork had found it not running: until then every call was refused as NETWORK_NOT_CREATED, and the next
+// createNetwork's attach was refused by the stack (the node is in use) and counted as a failure.
+void BluetoothMeshProfileService::attachResult(BluetoothError error, const std::string &adapterAddress)
+{
+	BT_INFO("MESH", 0, "[%s : %d], error: %d", __FUNCTION__, __LINE__, error);
+	if (BLUETOOTH_ERROR_NONE == error)
+	{
+		mNetworkCreated = true;
+		return;
+	}
+	if (BLUETOOTH_ERROR_MESH_NODE_NOT_AVAILABLE == error)
+	{
+		BT_ERROR("MESH", 0, "the stored mesh network is unknown to the stack: dropping it");
+		if (!LSUtils::callDb8MeshDeleteNetwork(getManager()))
+			BT_ERROR("MESH", 0, "could not drop the stored mesh network");
+	}
+	networkFailed(error, adapterAddress);
 }
 
 bool BluetoothMeshProfileService::provision(LSMessage &message)
@@ -828,7 +876,14 @@ bool BluetoothMeshProfileService::provision(LSMessage &message)
 		return true;
 	}
 
-	if (isScanDevicePresent(adapterAddress, requestObj["uuid"].asString()))
+	// A uuid that was not found by a scan used to be answered returnValue:true, subscribed:true without
+	// doing anything, and the client waited for a result that never came.
+	if (!isScanDevicePresent(adapterAddress, requestObj["uuid"].asString()))
+	{
+		LSUtils::respondWithError(request, BT_ERR_DEVICE_NOT_AVAIL);
+		return true;
+	}
+
 	{
 		/* Need not check if the method is subscribed. This method need to be
 		 * subscribed, else schema check will return error
@@ -859,6 +914,9 @@ bool BluetoothMeshProfileService::provision(LSMessage &message)
 
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
+			// The watch added above stayed, and kept getting the provisioning events of other clients.
+			if (!mProvResultWatch.empty())
+				removeClientWatch(&mProvResultWatch, mProvResultWatch.back());
 			LSUtils::respondWithError(request, error);
 			return true;
 		}
@@ -1041,17 +1099,6 @@ bool BluetoothMeshProfileService::setOnOff(LSMessage &message)
 		isSubscribe = requestObj["subscribe"].asBool();
 	}
 
-	if (isSubscribe)
-	{
-		bool retVal = addClientWatch(request, &mModelOnOffResultWatch,
-			adapterAddress, "");
-		if (!retVal)
-		{
-			LSUtils::respondWithError(request, BT_ERR_MESSAGE_OWNER_MISSING);
-			return true;
-		}
-	}
-
 	std::string bearer = "PB-ADV"; // default value
 
 	if (requestObj.hasKey("bearer"))
@@ -1075,12 +1122,29 @@ bool BluetoothMeshProfileService::setOnOff(LSMessage &message)
 		return true;
 	}
 
+	// Watched only once the request has passed its checks: a rejected one used to leave its watch behind,
+	// receiving the on/off results of other clients' requests.
+	BluetoothClientWatch *watch = nullptr;
+	if (isSubscribe)
+	{
+		bool retVal = addClientWatch(request, &mModelOnOffResultWatch,
+			adapterAddress, "");
+		if (!retVal)
+		{
+			LSUtils::respondWithError(request, BT_ERR_MESSAGE_OWNER_MISSING);
+			return true;
+		}
+		watch = mModelOnOffResultWatch.back();
+	}
+
 	BluetoothError error = impl->setOnOff(bearer,
 			(uint16_t)requestObj["destAddress"].asNumber<int32_t>(),
 			(uint16_t)requestObj["appKeyIndex"].asNumber<int32_t>(),
 			value, isSubscribe);
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
+		if (watch)
+			removeClientWatch(&mModelOnOffResultWatch, watch);
 		LSUtils::respondWithError(request, error);
 		return true;
 	}
@@ -1344,14 +1408,14 @@ void BluetoothMeshProfileService::provisionResult(BluetoothError error, const st
 								 uint8_t count,
 								 const std::string &uuid)
 {
-	BT_INFO("MESH", 0, "[%s : %d], num_watch: %d", __FUNCTION__, __LINE__, mProvResultWatch.size());
+	BT_INFO("MESH", 0, "[%s : %d], num_watch: %zu", __FUNCTION__, __LINE__, mProvResultWatch.size());
+	std::vector<BluetoothClientWatch *> finished;
 	for (auto watch : mProvResultWatch)
 	{
 		BT_INFO("MESH", 0, "AdapterAddress: %s --- %s", adapterAddress.c_str(), watch->getAdapterAddress().c_str());
 		if (convertToLower(adapterAddress) == convertToLower(watch->getAdapterAddress()))
 		{
 			LSMessage *message = watch->getMessage();
-			std::string payload = LSMessageGetPayload(message);
 			pbnjson::JValue replyObj = pbnjson::Object();
 
 			if (!LSUtils::parsePayload(LSMessageGetPayload(message), replyObj))
@@ -1360,9 +1424,17 @@ void BluetoothMeshProfileService::provisionResult(BluetoothError error, const st
 			}
 			std::string deviceUUID = replyObj["uuid"].asString();
 
+			// The end of a provisioning names its device; it belongs to the client provisioning that one.
+			// Every client on the adapter used to get it, and each stored the new node under its own uuid,
+			// replacing the db8 record of the device it had provisioned before.
+			const bool endProvision = (request == "endProvision");
+			if (endProvision && !uuid.empty() && convertToLower(deviceUUID) != convertToLower(uuid))
+				continue;
+
 			pbnjson::JValue object = pbnjson::Object();
 
-			object.put("subscribed", true);
+			// Provisioning is over for this client: its subscription ends, and the watch with it.
+			object.put("subscribed", !endProvision);
 			object.put("returnValue", true);
 			object.put("adapterAddress", adapterAddress);
 			object.put("request", request);
@@ -1395,8 +1467,13 @@ void BluetoothMeshProfileService::provisionResult(BluetoothError error, const st
 			}
 			object.put("uuid", deviceUUID);
 			LSUtils::postToClient(watch->getMessage(), object);
+			if (endProvision)
+				finished.push_back(watch);
 		}
 	}
+
+	for (auto watch : finished)
+		removeClientWatch(&mProvResultWatch, watch);
 }
 
 bool BluetoothMeshProfileService::createAppKey(LSMessage &message)
@@ -2390,8 +2467,11 @@ bool BluetoothMeshProfileService::keyRefresh(LSMessage &message)
 		waitTimeout = requestObj["waitTimeout"].asNumber<int32_t>();
 	}
 	auto watch = new BluetoothClientWatch(getManager()->get(), request.get(),
+										  // std::ref: std::bind copied the map, taken before the insert
+										  // below, so the handler never found the watch and the key
+										  // refresh stayed "in progress" until the service restarted.
 										  std::bind(&BluetoothMeshProfileService::handleKeyRefreshClientDisappeared,
-													this, mKeyRefreshWatch, netKeyIndex),
+													this, std::ref(mKeyRefreshWatch), netKeyIndex),
 										  adapterAddress, "");
 	mKeyRefreshWatch.insert(std::pair<uint16_t, BluetoothClientWatch*>(netKeyIndex, watch));
 
@@ -2411,7 +2491,7 @@ bool BluetoothMeshProfileService::keyRefresh(LSMessage &message)
 		else
 		{
 			responseObj.put("adapterAddress", adapterAddress);
-			for (int i = 0; i < blackListedNodes.size(); ++i)
+			for (std::size_t i = 0; i < blackListedNodes.size(); ++i)
 			{
 				if(!LSUtils::callDb8MeshDeleteNode(getManager(), blackListedNodes[i]))
 				{

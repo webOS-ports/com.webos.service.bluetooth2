@@ -31,7 +31,7 @@ class ClientWatch
 public:
 	ClientWatch(LSHandle *handle, LSMessage *message, ClientWatchStatusCallback callback);
 	ClientWatch(const ClientWatch &other) = delete;
-	~ClientWatch();
+	virtual ~ClientWatch();
 
 	LSMessage *getMessage() const { return mMessage; }
 	void setCallback(ClientWatchStatusCallback callback) { mCallback = callback; }
@@ -42,8 +42,13 @@ private:
 	void *mCookie;
 	ClientWatchStatusCallback mCallback;
 	guint mNotificationTimeout;
+	// The callback is delivered once. A client that cancels its call and then exits would otherwise be
+	// reported twice, and the callbacks that delete what the watch guards would do it twice.
+	bool mNotified;
+	bool mCancelNotificationAdded;
 
 	void startWatching();
+	void stopWatching();
 	void triggerClientDroppedNotification();
 
 	void notifyClientDisconnected();

@@ -21,6 +21,7 @@
 #include <string>
 #include <unordered_map>
 #include <map>
+#include <set>
 #include <mutex>
 
 #include <pbnjson.hpp>
@@ -98,8 +99,11 @@ private:
 		std::queue<QueueData *> receiveQueue;
 	} ChannelInfo;
 
+	// Owns its watch and its timeout source: destroyReadDataInfo() ends all three. Both used to outlive
+	// it, and a later watch callback or timeout then deleted whatever entry had reused its address.
 	typedef struct {
 		int32_t timeout;
+		guint timeoutSource;
 		LSUtils::ClientWatch *watch;
 		BluetoothSppChannelId stackChannelId;
 		std::string userChannelId;
@@ -112,17 +116,21 @@ private:
 	} CreateChannelInfo;
 
 	uint32_t mNextChannelId;
-	std::map<std::string, ChannelInfo *> mChannelInfo;
+	// By uuid, several per uuid: SPP devices normally share the standard SPP uuid, and a second connection used
+	// to fail to insert, leaking its channel and dropping its data. Lookups by channel id are unambiguous.
+	std::multimap<std::string, ChannelInfo *> mChannelInfo;
 	std::unordered_map<std::string, CreateChannelInfo *> mCreateChannelSubscriptons;
 	std::vector<ReadDataInfo *> mReadDataSubscriptions;
 	std::vector<std::string> mConnectingChannels;
 	std::mutex cmMutex;
+	std::set<guint> mPendingNotifications;
 
 	void postToReadDataSubscriber(const uint8_t *data, const uint32_t size, const LSUtils::ClientWatch *watch,
 	        const std::string &adapterAddress, const std::string &channelId);
 	ChannelInfo *getChannelInfo(const std::string &uuid);
 	ChannelInfo *getChannelInfo(const BluetoothSppChannelId channelId);
 	void makeDataBuffer(ChannelInfo *channelInfo);
+	void destroyReadDataInfo(ReadDataInfo *dataInfo);
 };
 
 #endif // CHANNELMANAGER_H

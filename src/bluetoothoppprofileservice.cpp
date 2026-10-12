@@ -60,6 +60,15 @@ BluetoothOppProfileService::BluetoothOppProfileService(BluetoothManagerService *
 
 BluetoothOppProfileService::~BluetoothOppProfileService()
 {
+	for (auto &subscription : mMonitorTransferSubscriptions)
+		delete subscription.second;
+	// Also left at shutdown: transfers, pending push requests and awaitTransferRequest subscribers.
+	for (auto &transfer : mTransfers)
+		delete transfer.second;
+	for (auto &pushRequest : mPushRequests)
+		delete pushRequest.second;
+	for (auto watch : mIncomingTransferWatchesForMultipleAdapters)
+		delete watch;
 }
 
 void BluetoothOppProfileService::initialize()
@@ -81,7 +90,7 @@ void BluetoothOppProfileService::initialize(const std::string &adapterAddress)
 		getImpl<BluetoothOppProfile>(adapterAddress)->registerObserver(this);
 }
 
-bool BluetoothOppProfileService::isDevicePaired(const std::string &address)
+bool BluetoothOppProfileService::isDevicePaired(const std::string &/*address*/)
 {
 	// NOTE: OPP connect method does not need to check the paired status of a device.
 	// So, we make the overriden isDevicePaired func, return value only true.
@@ -96,6 +105,14 @@ void BluetoothOppProfileService::cancelTransfer(BluetoothOppTransferId id, bool 
 
 	Transfer *transfer = transferIter->second;
 
+	// One cancel per transfer. A second one (the link dropped, then the client went away) captured the same
+	// entry, and both callbacks erased and deleted it.
+	if (transfer->canceled)
+	{
+		BT_DEBUG("OPP transfer %" PRIu64 " is already being canceled", id);
+		return;
+	}
+
 	BT_DEBUG("Cancel OPP transfer %" PRIu64 " for device %s", id, transfer->deviceAddress.c_str());
 
 	// To block anybody else from deleting the transfer mark
@@ -104,8 +121,13 @@ void BluetoothOppProfileService::cancelTransfer(BluetoothOppTransferId id, bool 
 	transfer->canceled = true;
 	transfer->clientDisappeared = clientDisappeared;
 
-	auto cancelCallback = [this, transferIter, id, transfer](BluetoothError error) {
+	auto cancelCallback = [this, id, transfer](BluetoothError /*error*/) {
 		BT_DEBUG("Successfully canceled bluetooth OPP transfer %" PRIu64, id);
+
+		// Looked up again rather than kept as an iterator across the SIL call.
+		auto transferIter = mTransfers.find(id);
+		if (transferIter == mTransfers.end() || transferIter->second != transfer)
+			return;
 
 		// Either that this time the client is invalid because he disappeared
 		// (crashed, canceled call, ...) or he is still valid because the
@@ -125,7 +147,14 @@ void BluetoothOppProfileService::cancelTransfer(BluetoothOppTransferId id, bool 
 		delete transfer;
 	};
 
-	getImpl<BluetoothOppProfile>()->cancelTransfer(id, cancelCallback);
+	// The transfer's own adapter; the default one is null once no adapter is left.
+	BluetoothOppProfile *impl = getImpl<BluetoothOppProfile>(transfer->adapterAddress);
+	if (!impl)
+	{
+		cancelCallback(BLUETOOTH_ERROR_FAIL);
+		return;
+	}
+	impl->cancelTransfer(id, cancelCallback);
 }
 
 void BluetoothOppProfileService::createTransfer(BluetoothOppTransferId id, const std::string &address, const std::string &adapterAddress, LSMessage *message)
@@ -287,10 +316,9 @@ bool BluetoothOppProfileService::prepareFileTransfer(LS::Message &request, pbnjs
 
 std::string BluetoothOppProfileService::buildStorageDirPath(const std::string &path)
 {
-	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
-	result += "/";
-	result += path;
-	return result;
+	// Empty, which the callers reject as an invalid path, when the client's path would leave the storage
+	// directory; "../../etc/shadow" used to be sent to the remote device.
+	return resolvePathUnderDirectory(WEBOS_MOUNTABLESTORAGEDIR, path);
 }
 
 void BluetoothOppProfileService::notifyClientTransferStarts(LS::Message &request, const std::string &adapterAddress)
@@ -615,8 +643,11 @@ std::string BluetoothOppProfileService::generateRequestId()
 	return mNextRequestIdStr;
 }
 
-void BluetoothOppProfileService::deletePushRequest(const std::string &requestId)
+void BluetoothOppProfileService::deletePushRequest(const std::string &requestIdRef)
 {
+	// A copy: callers pass the request's own id, which goes with it.
+	const std::string requestId = requestIdRef;
+
 	// pass the pushRequest in mPushRequests to mDeletedPushRequested
 	for (auto propIter = mPushRequests.begin(); propIter != mPushRequests.end(); propIter++)
 	{
@@ -628,6 +659,7 @@ void BluetoothOppProfileService::deletePushRequest(const std::string &requestId)
 			*/
 			//mDeletedPushRequested.insert(std::pair<std::string, PushRequest*>(pushRequest->requestId, pushRequest));
 			mPushRequests.erase(propIter);
+			delete pushRequest;	// was erased and leaked, one per incoming file
 			break;
 		}
 	}
@@ -675,6 +707,7 @@ void BluetoothOppProfileService::assignPushRequestFromUnused(PushRequest *pushRe
 
 	pushRequest->requestId = oldRequestId;
 	mPushRequests.erase(eraseIter);
+	delete pushTemp;	// the evicted request was leaked
 }
 
 void BluetoothOppProfileService::createPushRequest(BluetoothOppTransferId transferId, const std::string &adapterAddress, const std::string &address, const std::string &deviceName, const std::string &fileName, uint64_t fileSize)
@@ -756,7 +789,10 @@ void BluetoothOppProfileService::notifyConfirmationRequest(LS::Message &request,
 
 	if (!success)
 	{
+		// One reply: a second one with returnValue false used to follow the error.
 		LSUtils::respondWithError(request, BT_ERR_OPP_STATE_ERR);
+		LSMessageUnref(request.get());
+		return;
 	}
 
 	responseObj.put("returnValue", success);
@@ -838,15 +874,21 @@ void BluetoothOppProfileService::transferStateChanged(BluetoothOppTransferId tra
 	if (mTransferIds.size())
 	{
 		uint64_t requestListIndex = 0;
+		bool known = false;
 
 		for (auto transferIter : mTransferIds)
 		{
 			if (transferId == transferIter.second)
 			{
 				requestListIndex = (int64_t) transferIter.first;
+				known = true;
 				break;
 			}
 		}
+
+		// An unknown transfer used to fall back to index 0 and update, or finish and delete, the first request.
+		if (!known)
+			return;
 
 		auto updateRequest = mPushRequests.find(requestListIndex);
 		if (updateRequest == mPushRequests.end())
@@ -946,28 +988,43 @@ bool BluetoothOppProfileService::prepareConfirmationRequest(LS::Message &request
 		return true;
 	}
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
 	BluetoothOppTransferId transferId = findTransferId(requestIdStr);
 	if (BLUETOOTH_OPP_TRANSFER_ID_INVALID == transferId)
 	{
-                LSUtils::respondWithError(request, BT_ERR_OPP_TRANSFERID_NOT_EXIST);
+		LSUtils::respondWithError(request, BT_ERR_OPP_TRANSFERID_NOT_EXIST);
 		return true;
 	}
 
-	auto transferCallback = [this, adapterAddress, requestMessage](BluetoothError error) {
+	// Referenced after the check above, whose error return leaked it (accepting a request already
+	// rejected gets there).
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+
+	auto transferCallback = [this, adapterAddress, requestMessage, requestIdStr, accept](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (BLUETOOTH_ERROR_NONE != error)
+		{
 			notifyConfirmationRequest(request, adapterAddress, false);
+			// An accept the SIL refused (the push was given up meanwhile) has nothing left to wait for.
+			if (accept)
+			{
+				deleteTransferId(requestIdStr);
+				deletePushRequest(requestIdStr);
+			}
+		}
 		else
 			notifyConfirmationRequest(request, adapterAddress, true);
 	};
 	getImpl<BluetoothOppProfile>(adapterAddress)->supplyTransferConfirmation(transferId, accept, transferCallback);
 
+	// A rejected request is finished: it stayed in mPushRequests until 999 newer ones pushed it out. The transfer
+	// id goes first, as it is found through the request.
 	if (!accept)
+	{
 		deleteTransferId(requestIdStr);
+		deletePushRequest(requestIdStr);
+	}
 
 	return true;
 }
@@ -1041,9 +1098,6 @@ bool BluetoothOppProfileService::cancelTransfer(LSMessage &message)
 		return true;
 	}
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
 	BluetoothOppTransferId transferId = findTransferId(requestIdStr);
 	if (BLUETOOTH_OPP_TRANSFER_ID_INVALID == transferId)
 	{
@@ -1051,22 +1105,18 @@ bool BluetoothOppProfileService::cancelTransfer(LSMessage &message)
 		return true;
 	}
 
-	auto cancelTransferCallback = [this, pushRequest, requestMessage, adapterAddress](BluetoothError error) {
+	// Referenced after the checks above, whose error returns leaked it.
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+
+	// The request id, not the request: it can be deleted before the SIL answers.
+	const std::string requestId = pushRequest->requestId;
+	auto cancelTransferCallback = [this, requestId, requestMessage, adapterAddress](BluetoothError error) {
 		LS::Message request(requestMessage);
 
-		if (BLUETOOTH_ERROR_NONE != error)
-		{
-			deleteTransferId(pushRequest->requestId);
-			deletePushRequest(pushRequest->requestId);
-			notifyConfirmationRequest(request, adapterAddress, false);
-		}
-		else
-		{
-			deleteTransferId(pushRequest->requestId);
-			deletePushRequest(pushRequest->requestId);
-
-			notifyConfirmationRequest(request, adapterAddress, true);
-		}
+		deleteTransferId(requestId);
+		deletePushRequest(requestId);
+		notifyConfirmationRequest(request, adapterAddress, BLUETOOTH_ERROR_NONE == error);
 	};
 	getImpl<BluetoothOppProfile>(adapterAddress)->cancelTransfer(transferId, cancelTransferCallback);
 

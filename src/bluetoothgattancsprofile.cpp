@@ -238,7 +238,7 @@ bool BluetoothGattAncsProfile::advertise(LSMessage &message)
 	return true;
 }
 
-bool BluetoothGattAncsProfile::isAncsServiceSupported(LSMessage *requestMessage, std::string adapterAddress, std::string address)
+bool BluetoothGattAncsProfile::isAncsServiceSupported(LSMessage */*requestMessage*/, std::string adapterAddress, std::string address)
 {
 	//TODO:Should get called after BSA_BLE_CL_SEARCH_CMPL_EVT instead of waiting for timeout
 	BT_DEBUG("[%s](%d) getImpl->getServices\n", __FUNCTION__, __LINE__);
@@ -341,7 +341,7 @@ bool BluetoothGattAncsProfile::connectCallback(LSMessage *requestMessage, const 
 		{
 			LSUtils::respondWithError(requestMessage, BT_ERR_GATT_SERVICE_DISCOVERY_FAIL);
 			LSMessageUnref(requestMessage);
-			mImpl->disconnect(address, std::bind(&BluetoothGattAncsProfile::disconnectCallback, this, requestMessage, adapterAddress, address, true, _1));
+			mImpl->disconnect(address, std::bind(&BluetoothGattAncsProfile::disconnectCallback, this, nullptr, adapterAddress, address, true, _1));
 			return;
 		}
 
@@ -355,9 +355,10 @@ bool BluetoothGattAncsProfile::connectCallback(LSMessage *requestMessage, const 
 			if (!thisRef->isAncsServiceSupported(timeoutData->requestMessage, timeoutData->adapterAddress, timeoutData->address))
 			{
 				thisRef->mImpl->disconnect(timeoutData->address,
-						std::bind(&BluetoothGattAncsProfile::disconnectCallback, thisRef, timeoutData->requestMessage, timeoutData->adapterAddress, timeoutData->address, true, _1));
+						std::bind(&BluetoothGattAncsProfile::disconnectCallback, thisRef, nullptr, timeoutData->adapterAddress, timeoutData->address, true, _1));
 				LSUtils::respondWithError(request, BT_ERR_PROFILE_CONNECT_FAIL);
 				LSMessageUnref(timeoutData->requestMessage);
+				DELETE_OBJ(timeoutData)	// leaked here
 				return false;
 			}
 			thisRef->markDeviceAsNotConnecting(timeoutData->address);
@@ -418,14 +419,20 @@ void BluetoothGattAncsProfile::disconnectCallback(LSMessage *requestMessage, con
 {
 
 	BT_INFO("ANCS", 0, "[%s](%d) called\n", __FUNCTION__, __LINE__);
-	LS::Message request(requestMessage);
 
+	// A quiet disconnect follows a failed connect whose request has been answered and released already: it
+	// used to be passed here anyway and answered again after its last reference was gone. A disconnect
+	// request is answered and released here; its reference used to leak.
 	if (error != BLUETOOTH_ERROR_NONE)
 	{
-		LSUtils::respondWithError(request, BT_ERR_PROFILE_DISCONNECT_FAIL);
+		if (!quietDisconnect && requestMessage)
+		{
+			LSUtils::respondWithError(requestMessage, BT_ERR_PROFILE_DISCONNECT_FAIL);
+			LSMessageUnref(requestMessage);
+		}
 		return;
 	}
-	auto unpairCallback = [requestMessage ](BluetoothError error) {
+	auto unpairCallback = [ ](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
 			BT_WARNING(MSGID_UNPAIR_FROM_ANCS_FAILED, 0, "Unable to unpair device");
@@ -440,13 +447,14 @@ void BluetoothGattAncsProfile::disconnectCallback(LSMessage *requestMessage, con
 
 	markDeviceAsNotConnecting(address);
 	markDeviceAsNotConnected(address);
-	if (!quietDisconnect)
+	if (!quietDisconnect && requestMessage)
 	{
 		pbnjson::JValue responseObj = pbnjson::Object();
 		responseObj.put("returnValue", true);
 		responseObj.put("adapterAddress", adapterAddress);
 		responseObj.put("address", address);
-		LSUtils::postToClient(request, responseObj);
+		LSUtils::postToClient(requestMessage, responseObj);
+		LSMessageUnref(requestMessage);
 	}
 
 	notifyStatusSubscribers(adapterAddress, address, false);
@@ -730,7 +738,7 @@ void BluetoothGattAncsProfile::handleNotificationClientDisappeared(const std::st
 
 	BT_DEBUG("Disabling characteristic watch to device %s", address.c_str());
 
-	getImpl<BluetoothGattProfile>(adapterAddress)->changeCharacteristicWatchStatus(address, mAncsUuid, BluetoothUuid(NOTIFICATION_SOURCE_UUID), false, [this](BluetoothError error)
+	getImpl<BluetoothGattProfile>(adapterAddress)->changeCharacteristicWatchStatus(address, mAncsUuid, BluetoothUuid(NOTIFICATION_SOURCE_UUID), false, [](BluetoothError /*error*/)
 	{
 		BT_WARNING(MSGID_SUBSCRIPTION_CLIENT_DROPPED, 0, "No LS2 error response can be issued since subscription client has dropped");
 	});
@@ -747,15 +755,15 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 		if (notificationIter != mAwaitNotificationSubscriptions.end())
 		{
 			LS::SubscriptionPoint *subscriptionPoint = notificationIter->second;
-			BluetoothGattValue values = characteristic.getValue();
-			BT_DEBUG("Found notification source characteristic value of size %zu", values.size());
+			AncsNotificationEvent event;
+			if (!parseAncsNotificationSource(characteristic.getValue(), event))
+				return;
 
-			int eventID = (int32_t) values[0];
-			int eventFlags = (int32_t) values[1];
-			int categoryID = (int32_t) values[2];
-			int categoryCount = (int32_t) values[3];
-
-			int32_t notificationUid = values[4] | (values[5] << 8) | (values[6] << 16) | (values[7] << 24);
+			int eventID = event.eventId;
+			int eventFlags = event.eventFlags;
+			int categoryID = event.categoryId;
+			int categoryCount = event.categoryCount;
+			int32_t notificationUid = (int32_t)event.notificationUid;
 
 			//Build response
 			pbnjson::JValue responseObj = pbnjson::Object();
@@ -807,125 +815,13 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 		std::stringstream buffer;
 		std::copy (values.begin(), values.end(), std::ostream_iterator<uint8_t>(buffer, ", "));
 		BT_DEBUG ("values %s", buffer.str().c_str());
-		int index = 0;
 		if (!mNotificationQueryInfo)
 		{
 			BT_DEBUG("ANCS QueryInfo object empty");
 			return;
 		}
-		//Ancs block sizes are roughly 155 bytes long. When queried for multiple notification attributes,  the combined response length can
-		//exceed this block size or message size may be longer than max block size.
-		//Ancs chunks the response with only the first block containing the COMMAND_ID, and subsequent blocks containing only contiguous data
-		//To handle responses spanning multiple blocks, we maintain required information in mNotificationQueryInfo object.
-		//which is updated after reading a complete attribute or when a new block is received.
-		if (values[index] == COMMAND_ID_GET_NOTIFICATION_ATTRIBUTES)
-		{
-			//Case 1:Incoming block format [0:CommandId], [1-4: NotificationId],[5-vSize : attr1]
-			if (vSize < 8)
-			{
-				BT_DEBUG("ANCS data source characteristic value  has no attribute");
-				return;
-			}
-			int32_t notificationId = values[index + 1] | (values[index + 2] << 8) | (values[index + 3] << 16) | (values[index + 4] << 24);
-			index += 5;
-			BT_DEBUG("ANCS notificationId=%d", notificationId);
 
-		}
-		else if (mNotificationQueryInfo->remainingLen == -1 && mNotificationQueryInfo->readingAttr != MAX_UINT16)
-		{
-			if (mNotificationQueryInfo->attrLenByte1 == MAX_UINT16)
-			{
-				//Case 3:Previous block: [0 to n :attr1-id-data][n+1 to (vSize -2): attr2 id and data][vsize-1: attr3 Id]
-				//		 Current block:  [0 and 1: attr3 len_bytes_1_2][[1-n: attr3 data]....
-				mNotificationQueryInfo->remainingLen = values[index] | (values[index + 1] << 8);
-				index += 2;
-			}
-			else
-			{
-				//Case 2:Previous block: [0 to n :attr1-id-data][n+1 to (vSize -2): attr2 id and data][vsize-2: attr3Id] [vsize-1: attr3 len_1st_byte]
-				//		 Current block:  [0 :attr3 len_2nd_byte][1-n: attr3 data]....
-				mNotificationQueryInfo->remainingLen = mNotificationQueryInfo->attrLenByte1 | values[index++] <<8;
-				mNotificationQueryInfo->attrLenByte1 = MAX_UINT16;
-			}
-		}
-		if (mNotificationQueryInfo->remainingLen > 0  && mNotificationQueryInfo->readingAttr != MAX_UINT16)
-		{
-			//Case 4: [0 - x: data overflowed from previous block] [x+1 - vSize :attrN]
-			//Continuation of case 2 and case 3
-			for (auto attrStatus = mNotificationQueryInfo->attrList.begin(); attrStatus!=mNotificationQueryInfo->attrList.end(); attrStatus++)
-			{
-				if (attrStatus->attrId == mNotificationQueryInfo->readingAttr)
-				{
-					size_t len = mNotificationQueryInfo->remainingLen;
-					if (len > values.size())
-					{
-						mNotificationQueryInfo->remainingLen = len - values.size();
-						len = values.size();
-					}
-					else
-					{
-						mNotificationQueryInfo->remainingLen = -1;
-						attrStatus->found = true;
-						mNotificationQueryInfo->readingAttr = MAX_UINT16;
-					}
-
-					attrStatus->value.append(values.begin() + index , values.begin()+ index + len);
-					index = index+len;
-					break;
-				}
-			}
-		}
-
-		while(index < vSize)
-		{
-			int32_t attrId = values[index++];
-			mNotificationQueryInfo->readingAttr = attrId;
-			if (index+1 >= vSize)
-			{
-				//last byte was 1st byte of attrLen
-				mNotificationQueryInfo->attrLenByte1 = values[index++];
-				break;
-			}
-			if (index >= vSize)
-			{ //last byte was attrId
-				break;
-			}
-			int32_t attributeLen = values[index] | (values[index + 1] << 8);
-			index += 2;
-
-			BT_DEBUG("attrId %d attributeLen %d", attrId, attributeLen);
-
-			std::string attrValue;
-			int valLen = (index + attributeLen >= vSize) ? (vSize - index) : attributeLen;
-			attrValue.assign(values.begin() + index, values.begin() + index + valLen);
-
-			index = index + valLen;
-
-			for (auto attrStatus = mNotificationQueryInfo->attrList.begin(); attrStatus != mNotificationQueryInfo->attrList.end(); attrStatus++)
-			{
-				if (attrStatus->attrId == attrId)
-				{
-					attrStatus->value = attrValue;
-					if (valLen == attributeLen)
-					{
-						attrStatus->found = true;
-						mNotificationQueryInfo->readingAttr = MAX_UINT16;
-						BT_DEBUG("attributeId %d, value %s", attrId, attrValue.c_str());
-					}
-					mNotificationQueryInfo->remainingLen = attributeLen - valLen;
-					break;
-				}
-			}
-		}
-		//compose the response
-		bool foundAllAttributes = true;
-		for (auto attrStatus = mNotificationQueryInfo->attrList.begin(); attrStatus != mNotificationQueryInfo->attrList.end(); attrStatus++)
-		{
-			if (!attrStatus->found)
-			{
-				foundAllAttributes = false;
-			}
-		}
+		bool foundAllAttributes = parseAncsDataSourceBlock(*mNotificationQueryInfo, values);
 
 		if (foundAllAttributes)
 		{
@@ -950,7 +846,7 @@ void BluetoothGattAncsProfile::characteristicValueChanged(const std::string &add
 			DELETE_OBJ(mNotificationQueryInfo)
 
 			BT_DEBUG("[%s](%d) getImpl->changeCharacteristicWatchStatus\n", __FUNCTION__, __LINE__);
-			getImpl<BluetoothGattProfile>(adapterAddress)->changeCharacteristicWatchStatus (address, mAncsUuid, BluetoothUuid(DATA_SOURCE_UUID), false, [this](BluetoothError error)
+			getImpl<BluetoothGattProfile>(adapterAddress)->changeCharacteristicWatchStatus (address, mAncsUuid, BluetoothUuid(DATA_SOURCE_UUID), false, [](BluetoothError /*error*/)
 			{
 			      BT_DEBUG("Found all attributes. Remove CharacteristicWatch for DATA_SOURCE_UUID");
 			});
@@ -1113,11 +1009,8 @@ bool BluetoothGattAncsProfile::queryNotificationAttributes(LSMessage &message)
 	value.push_back(notificationId >> 24 & 0xff);
 
 	mNotificationQueryInfo = new NotificationIdQueryInfo();
-	mNotificationQueryInfo->readingAttr = MAX_UINT16;
-	mNotificationQueryInfo->attrLenByte1 = MAX_UINT16;
 	mNotificationQueryInfo->deviceAddress = deviceAddress;
 	mNotificationQueryInfo->notificationId = notificationId;
-	mNotificationQueryInfo->remainingLen = -1;
 
 	for (int j = 0; j < attributesObj.arraySize(); j++)
 	{
@@ -1153,7 +1046,7 @@ bool BluetoothGattAncsProfile::queryNotificationAttributes(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto monitorCallback = [this, requestMessage, adapterAddress, deviceAddress] (BluetoothError error)
+	auto monitorCallback = [requestMessage, adapterAddress, deviceAddress] (BluetoothError error)
 		{
 			BT_INFO("ANCS", 0, "monitorCallback called with error %d for dataSourceUuid ", error);
 			if (error != BLUETOOTH_ERROR_NONE)
@@ -1205,7 +1098,8 @@ bool BluetoothGattAncsProfile::queryNotificationAttributes(LSMessage &message)
 			BT_DEBUG("[%s](%d) getImpl->writeCharacteristic\n", __FUNCTION__, __LINE__);
 			thisRef->getImpl<BluetoothGattProfile>(timeoutData->adapterAddress)->writeCharacteristic(timeoutData->address, thisRef->mAncsUuid, timeoutData->characteristic, writeCharacteristicCallback);
 
-			return true;
+			// Once: the write callback frees timeoutData. Returning true repeated the timer on the freed data.
+			return false;
 		};
 
 	g_timeout_add_seconds(WRITE_TIMEOUT, (GSourceFunc) serviceTimeoutCallback, (gpointer) timeoutData);
@@ -1310,7 +1204,7 @@ bool BluetoothGattAncsProfile::performNotificationAction(LSMessage &message)
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto writeCharacteristicCallback  = [this, requestMessage, adapterAddress](BluetoothError error) {
+	auto writeCharacteristicCallback  = [requestMessage, adapterAddress](BluetoothError error) {
 
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
@@ -1335,7 +1229,7 @@ bool BluetoothGattAncsProfile::performNotificationAction(LSMessage &message)
 }
 
 
-bool BluetoothGattAncsProfile::queryAppAttributes(LSMessage &message)
+bool BluetoothGattAncsProfile::queryAppAttributes(LSMessage &/*message*/)
 {
 	return true;
 }

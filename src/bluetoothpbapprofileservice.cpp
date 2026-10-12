@@ -59,6 +59,9 @@ BluetoothPbapProfileService::BluetoothPbapProfileService(BluetoothManagerService
 
 BluetoothPbapProfileService::~BluetoothPbapProfileService()
 {
+	// Pulls still under way have their subscription points here until the transfer ends.
+	for (auto &subscription : mGetPhoneBookSubscriptions)
+		delete subscription.second;
 }
 
 void BluetoothPbapProfileService::initialize()
@@ -133,6 +136,10 @@ bool BluetoothPbapProfileService::awaitAccessRequest(LSMessage &message)
 void BluetoothPbapProfileService::propertiesChanged(const std::string &adapterAddress, const std::string &address, BluetoothPropertiesList properties)
 {
 	BluetoothProfileService::propertiesChanged(adapterAddress, address, properties);
+
+	// A new session starts at the root of the phone book again.
+	if (!isDeviceConnected(adapterAddress, address))
+		mPhoneBookFolders.erase(convertToLower(address));
 }
 
 void BluetoothPbapProfileService::propertiesChanged(const std::string &address, BluetoothPropertiesList properties)
@@ -485,18 +492,28 @@ bool BluetoothPbapProfileService::setPhoneBook(LSMessage &message)
 	std::string repository = requestObj["repository"].asString();
 	std::string object = requestObj["object"].asString();
 
-	setFolderRepository(repository);
-	setFolderObject(object);
+	// Both become folder names under the storage directory: "../../../var/lib/x" used to create, and
+	// later write into, directories anywhere the service can write.
+	if (!isSinglePathComponent(repository) || !isSinglePathComponent(object))
+	{
+		LSUtils::respondWithError(request, BT_ERR_SCHEMA_VALIDATION_FAIL);
+		return true;
+	}
 
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
-	auto setPhoneBookCallback = [this, adapterAddress,address, requestMessage](BluetoothError error) {
+	auto setPhoneBookCallback = [this, adapterAddress, address, repository, object, requestMessage](BluetoothError error) {
 		LS::Message request(requestMessage);
 
 		if (BLUETOOTH_ERROR_NONE != error)
 			notifySetPhoneBookRequest(request, error, adapterAddress, address, false);
 		else
+		{
+			// Only once the device has changed folder, and only for that device: this was one folder for
+			// all devices, set before the request and kept when it failed.
+			mPhoneBookFolders[convertToLower(address)] = std::make_pair(repository, object);
 			notifySetPhoneBookRequest(request, error, adapterAddress, address, true);
+		}
 	};
 
 	getImpl<BluetoothPbapProfile>(adapterAddress)->setPhoneBook(address, repository, object, setPhoneBookCallback);
@@ -522,6 +539,7 @@ void BluetoothPbapProfileService::notifyGetvCardFiltersRequest(LS::Message &requ
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -540,6 +558,7 @@ void BluetoothPbapProfileService::notifyGetSizeRequest(LS::Message &request, Blu
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -558,6 +577,7 @@ void BluetoothPbapProfileService::notifySetPhoneBookRequest(LS::Message &request
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -575,6 +595,7 @@ void BluetoothPbapProfileService::notifyConfirmationRequest(LS::Message &request
 	if (!success)
 	{
 		LSUtils::respondWithError(request, BT_ERR_PBAP_STATE_ERR);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -898,6 +919,7 @@ void BluetoothPbapProfileService::notifyVCardListingRequest(LS::Message &request
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -916,6 +938,7 @@ void BluetoothPbapProfileService::notifySearchPhoneBookRequest(LS::Message &requ
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -1049,6 +1072,7 @@ void BluetoothPbapProfileService::notifyGetPhoneBookPropertiesRequest (LS::Messa
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 	responseObj.put("adapterAddress", adapterAddress);
@@ -1120,7 +1144,8 @@ bool BluetoothPbapProfileService::pullvCard(LSMessage &message)
 
 	std::string check_destinationFile;
 
-	if (requestObj.hasKey("vCardVersion"))
+	// destinationFile was only read when vCardVersion was given as well.
+	if (requestObj.hasKey("destinationFile"))
 	{
 		check_destinationFile = requestObj["destinationFile"].asString();
 		if(check_destinationFile.empty())
@@ -1245,9 +1270,13 @@ bool BluetoothPbapProfileService::pullPhoneBook(LSMessage &message)
 		LS::Message request(requestMessage);
 		if((subscribed)&&(BLUETOOTH_ERROR_NONE == error))
 		{
-			LS::SubscriptionPoint* subscriptionPoint = new LS::SubscriptionPoint;
-			mGetPhoneBookSubscriptions.insert({objectPath,subscriptionPoint});
-			subscriptionPoint->setServiceHandle(getManager());
+			// A transfer that already has subscribers gets one more; the insert used to fail and leak the new point.
+			LS::SubscriptionPoint *&subscriptionPoint = mGetPhoneBookSubscriptions[objectPath];
+			if (!subscriptionPoint)
+			{
+				subscriptionPoint = new LS::SubscriptionPoint;
+				subscriptionPoint->setServiceHandle(getManager());
+			}
 			subscriptionPoint->subscribe(request);
 		}
 
@@ -1357,6 +1386,7 @@ void BluetoothPbapProfileService::notifyPullVcardRequest(LS::Message &request, B
 	if (!success)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 
@@ -1383,6 +1413,7 @@ void BluetoothPbapProfileService::sendGetPhoneBookResponse(LS::Message &request,
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
 		LSUtils::respondWithError(request, error);
+		LSMessageUnref(request.get());	// leaked on errors
 		return;
 	}
 	pbnjson::JValue responseObj = pbnjson::Object();
@@ -1402,21 +1433,32 @@ void BluetoothPbapProfileService::appendGenericPullResponse(pbnjson::JValue &res
 
 std::string BluetoothPbapProfileService::buildStorageDirPath(const std::string &path, const std::string &address)
 {
+	std::string deviceFolder = replaceString(convertToLower(address),":","_");
+	if (!isSinglePathComponent(deviceFolder))
+		return "";
+
 	std::string result = WEBOS_MOUNTABLESTORAGEDIR;
 	result += "/";
 	result += "pbap";
 	result += "/";
-	result += replaceString(convertToLower(address),":","_");
+	result += deviceFolder;
 	result += "/";
-	result += getFolderRepository();
-	result += "/";
-	result += getFolderObject();
-	result += "/";
+	auto folder = mPhoneBookFolders.find(convertToLower(address));
+	if (folder != mPhoneBookFolders.end())
+	{
+		result += folder->second.first;
+		result += "/";
+		result += folder->second.second;
+		result += "/";
+	}
+	else
+		result += "//";
 	if (g_mkdir_with_parents(result.c_str(), 0755) != 0)
 	{
 		BT_DEBUG("failed to create folder: %s", result.c_str());
 	}
-	result += path;
-	return result;
+
+	// Empty, which the callers reject, when the client's file name would leave the phone book folder.
+	return resolvePathUnderDirectory(result, path);
 }
 

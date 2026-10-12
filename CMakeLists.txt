@@ -23,8 +23,8 @@ include(webOS/webOS)
 webos_modules_init(1 0 0 QUALIFIER RC7)
 webos_component(1 0 0)
 
-# Enable C++11 support (still gcc 4.6 so can't use -std=c++11)
-webos_add_compiler_flags(ALL -std=c++11 -Wall)
+# C++23, with the usual warnings on
+webos_add_compiler_flags(ALL -std=c++23 -Wall -Wextra)
 
 include(FindPkgConfig)
 
@@ -88,3 +88,10 @@ webos_build_daemon()
 webos_build_system_bus_files()
 webos_build_db8_files()
 webos_build_configured_file(files/conf/pmlog/webos-bluetooth-service.conf SYSCONFDIR pmlog.d)
+
+# Unit tests: off by default, so image builds are unaffected (cmake -DBUILD_TESTING=ON).
+option(BUILD_TESTING "Build the unit tests" OFF)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

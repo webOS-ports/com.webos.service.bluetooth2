@@ -304,14 +304,13 @@ class BluetoothGattProfileService : public BluetoothProfileService,
 			return true;
 		}
 
-        void removeAllLocalService()
-        {
-            for(auto serviceIter : mLocalServices)
-			{
-                delete serviceIter.second;
-                mLocalServices.erase(serviceIter.first);
-            }
-        }
+		void removeAllLocalService()
+		{
+			// Erasing by key inside a range-for freed the node the loop was about to advance from.
+			for (auto &serviceIter : mLocalServices)
+				delete serviceIter.second;
+			mLocalServices.clear();
+		}
 
 		LocalService* findLocalService(uint16_t serviceId)
 		{
@@ -381,8 +380,10 @@ class BluetoothGattProfileService : public BluetoothProfileService,
 	void addLocalService(const BluetoothUuid applicationUuid, const BluetoothGattService &service, BluetoothResultCallback callback, const std::string &adapterAddress);
 	void initCharacteristic(LocalService* newService); // TODO: Change name
 	bool hasNext(LocalService* newService);
-	void addLocalCharacteristic(LocalServer* server, LocalService* newService, const std::string &adapterAddress);
-	void addCharacteristicCallback(LocalServer* server, LocalService* newService, BluetoothError error, uint16_t charId, const std::string &adapterAddress);
+	void addLocalCharacteristic(uint16_t serverId, LocalService* newService, const std::string &adapterAddress);
+	void addCharacteristicCallback(uint16_t serverId, LocalService* newService, BluetoothError error, uint16_t charId, const std::string &adapterAddress);
+	bool isPendingService(LocalService *service) const;
+	void finishPendingService(LocalService *service, BluetoothError error);
 	bool removeLocalServer(uint16_t appId, const std::string &adapterAddress);
 	bool removeLocalService(uint16_t serverId, const BluetoothUuid &uuid, const std::string &adapterAddress);
 	bool removeLocalService(const BluetoothUuid &uuid, const std::string &adapterAddress);
@@ -454,7 +455,7 @@ public:
 
 	static uint16_t nextClientId();
 	virtual void initialize();
-	virtual void initialize(BluetoothProfile *impl) {};
+	virtual void initialize(BluetoothProfile */*impl*/) {};
 	void initialize(const std::string &adapterAddress);
 	bool connect(LSMessage &message);
 	bool disconnect(LSMessage &message);
@@ -524,11 +525,17 @@ private:
 	pbnjson::JValue buildCharacteristics(bool localAdapterServices, const BluetoothGattCharacteristicList &characteristicsList);
 	void notifyGetServicesSubscribers(bool localAdapterChanged, const std::string &adapterAddress, const std::string &deviceAddress, BluetoothGattServiceList serviceList);
 	bool parseValue(pbnjson::JValue valueObj, BluetoothGattValue *value);
+	void storeGattConnectWatch(const std::string &address, LSUtils::ClientWatch *watch);
+	void removeGattConnectWatch(const std::string &address);
+	void storeConnectedDevice(uint16_t appId, connectedDeviceInfo *info);
+	void eraseConnectedDevice(uint16_t appId);
+	void releaseCharacteristicWatch(const std::string &adapterAddress, const std::string &deviceAddress, uint16_t handle,
+	                                const BluetoothUuid &serviceUuid, const BluetoothUuid &characteristicUuid);
 	void handleMonitorCharacteristicClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);
 	void handleMonitorCharacteristicsClientDropped(MonitorCharacteristicSubscriptionInfo &subscriptionInfo, LSUtils::ClientWatch *monitorCharacteristicsWatch);
 	bool isDescriptorValid(const std::string &address, const uint16_t &handle, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
-	bool isDescriptorValid(const std::string &address, const std::string &serviceUuid, const std::string &descriptorUuuid,
-	                       const std::string &characteristicUuid, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
+	bool isDescriptorValid(const std::string &address, const std::string &serviceUuid, const std::string &characteristicUuid,
+	                       const std::string &descriptorUuid, BluetoothGattDescriptor &descriptor, const std::string &adapterAddress);
 	void removeSubscriptionPoint(const std::string &adapterAddress, const std::string &address);
 
 	std::unordered_map<std::string, LS::SubscriptionPoint*> mGetServicesSubscriptions;

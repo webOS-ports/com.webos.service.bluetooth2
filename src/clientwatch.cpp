@@ -26,13 +26,27 @@ ClientWatch::ClientWatch(LSHandle *handle, LSMessage *message, ClientWatchStatus
     mMessage(message),
     mCookie(0),
     mCallback(callback),
-    mNotificationTimeout(0)
+    mNotificationTimeout(0),
+    mNotified(false),
+    mCancelNotificationAdded(false)
 {
 	if (!mMessage)
 		return;
 
 	LSMessageRef(mMessage);
-	startWatching();
+	try
+	{
+		startWatching();
+	}
+	catch (...)
+	{
+		// The destructor does not run for a constructor that throws: undo the registration that did
+		// succeed, as it points at this object, and the message reference.
+		stopWatching();
+		LSMessageUnref(mMessage);
+		mMessage = nullptr;
+		throw;
+	}
 }
 
 ClientWatch::~ClientWatch()
@@ -41,18 +55,28 @@ ClientWatch::~ClientWatch()
 	if (mNotificationTimeout)
 		g_source_remove(mNotificationTimeout);
 
+	stopWatching();
+
+	if (mMessage)
+		LSMessageUnref(mMessage);
+}
+
+void ClientWatch::stopWatching()
+{
 	if (mCookie)
 	{
 		LS::Error error;
 
 		if (!LSCancelServerStatus(mHandle, mCookie, error.get()))
 			error.log(PmLogGetLibContext(), "LS_FAILED_TO_UNREG_SRV_STAT");
+		mCookie = 0;
 	}
 
-	if (mMessage)
-		LSMessageUnref(mMessage);
-
-	LSCallCancelNotificationRemove(mHandle, &ClientWatch::clientCanceledCallback, this, NULL);
+	if (mCancelNotificationAdded)
+	{
+		LSCallCancelNotificationRemove(mHandle, &ClientWatch::clientCanceledCallback, this, NULL);
+		mCancelNotificationAdded = false;
+	}
 }
 
 bool ClientWatch::serverStatusCallback(LSHandle *, const char *, bool connected, void *context)
@@ -103,6 +127,7 @@ void ClientWatch::startWatching()
 
 	if (!LSCallCancelNotificationAdd(mHandle, &ClientWatch::clientCanceledCallback, this, error.get()))
 		throw error;
+	mCancelNotificationAdded = true;
 }
 
 gboolean ClientWatch::sendClientDroppedNotification(gpointer user_data)
@@ -112,7 +137,9 @@ gboolean ClientWatch::sendClientDroppedNotification(gpointer user_data)
 		return FALSE;
 
 	watch->mNotificationTimeout = 0;
+	watch->mNotified = true;
 
+	// The callback may delete the watch: nothing touches it after this call.
 	if (watch->mCallback)
 		watch->mCallback();
 
@@ -121,7 +148,7 @@ gboolean ClientWatch::sendClientDroppedNotification(gpointer user_data)
 
 void ClientWatch::triggerClientDroppedNotification()
 {
-	if (mNotificationTimeout)
+	if (mNotificationTimeout || mNotified)
 		return;
 
 	// We have to offload the actual callback here as otherwise we risk

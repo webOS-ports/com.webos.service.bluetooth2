@@ -58,6 +58,7 @@ public:
 	bool writeData(LSMessage &message);
 	bool readData(LSMessage &message);
 
+	using BluetoothProfileService::notifyStatusSubscribers;
 	virtual void notifyStatusSubscribers(const std::string &adapterAddress, const std::string &address, const std::string &uuid,
 	        bool connected);
 	virtual bool isConnectSchemaAvailable(LS::Message &request, pbnjson::JValue &requestObj);

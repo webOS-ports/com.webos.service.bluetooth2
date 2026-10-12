@@ -28,6 +28,19 @@ void eraseAllSubStr(std::string & mainStr, const std::string & toErase);
 
 bool checkPathExists(const std::string &path);
 bool checkFileIsValid(const std::string &path);
+// Paths from Luna clients are relative to a storage directory. True when \p path is relative and has no
+// "." or ".." component, so appending it to a directory cannot name anything outside it.
+bool isContainedRelativePath(const std::string &path);
+// True for one path component that is not "." or "..": a folder name, not a path.
+bool isSinglePathComponent(const std::string &name);
+// Resolves \p path, symbolic links included, and checks that it is \p baseDir or lies under it; the
+// resolved path is stored in \p resolved. \p path must exist.
+bool resolveUnderDirectory(const std::string &path, const std::string &baseDir, std::string &resolved);
+// The same for a file that may not exist yet: its directory must exist and lie under \p baseDir.
+bool resolveParentUnderDirectory(const std::string &path, const std::string &baseDir, std::string &resolved);
+// \p relativePath under \p baseDir, resolved, for a file that exists or one to be created there; empty if
+// the path would leave \p baseDir (".." components, an absolute path, a symbolic link pointing outside).
+std::string resolvePathUnderDirectory(const std::string &baseDir, const std::string &relativePath);
 bool changeGroup(const std::string &groupName, const std::string &fileName);
 bool changeFilePermission(const std::string &permission, const std::string &fileName);
 bool changeFolderPermission(const std::string &permission, const std::string &folderName);

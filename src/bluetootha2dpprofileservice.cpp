@@ -137,7 +137,7 @@ void BluetoothA2dpProfileService::audioSocketCreated(const std::string &address,
 	mAudioSocketInfo->isIn = isIn;
 }
 
-void BluetoothA2dpProfileService::audioSocketDestroyed(const std::string &address, const std::string &path, BluetoothA2dpAudioSocketType type, bool isIn)
+void BluetoothA2dpProfileService::audioSocketDestroyed(const std::string &/*address*/, const std::string &path, BluetoothA2dpAudioSocketType /*type*/, bool /*isIn*/)
 {
 	BT_INFO("A2DP", 0, "audioSocketDestroyed : path %s", path.c_str());
 
@@ -151,9 +151,9 @@ void BluetoothA2dpProfileService::audioSocketDestroyed(const std::string &addres
 		DELETE_OBJ(mAptxConfigurationInfo);
 }
 
-void BluetoothA2dpProfileService::sbcConfiguraionChanged(const std::string &address, const BluetoothSbcConfiguration &sbcConfiguration)
+void BluetoothA2dpProfileService::sbcConfigurationChanged(const std::string &address, const BluetoothSbcConfiguration &sbcConfiguration)
 {
-	BT_INFO("A2DP", 0, "sbcConfiguraionChanged : address %s", address.c_str());
+	BT_INFO("A2DP", 0, "sbcConfigurationChanged : address %s", address.c_str());
 
 	auto device = getManager()->findDevice(address);
 	if (!device)
@@ -484,7 +484,11 @@ bool BluetoothA2dpProfileService::getAudioPath(LSMessage &message)
 		else if (mAudioSocketInfo->type == BluetoothA2dpAudioSocketType::UDP)
 			responseObj.put("type", "udp");
 		else
+		{
+			// One reply: the success reply used to follow this error.
 			LSUtils::respondWithError(request, BT_ERR_A2DP_GET_SOCKET_PATH_FAILED);
+			return true;
+		}
 
 		responseObj.put("direction", mAudioSocketInfo->isIn);
 
@@ -627,7 +631,11 @@ bool BluetoothA2dpProfileService::getCodecConfiguration(LSMessage &message)
 		auto watch = new LSUtils::ClientWatch(getManager()->get(), request.get(),
 		                    std::bind(&BluetoothA2dpProfileService::handleGetCodecConfigurationClientDisappeared, this, adapterAddress, deviceAddress));
 
-		mGetCodecConfigurationWatches.insert(std::pair<std::string, LSUtils::ClientWatch*>(deviceAddress, watch));
+		// One subscription per device: the new one replaces the old, whose client is told it ended. The
+		// insert used to fail silently, leaving the new watch registered but unused; when that client went
+		// away it removed the other client's subscription instead.
+		removeGetCodecConfiguraionForDevice(deviceAddress, false, false);
+		mGetCodecConfigurationWatches[deviceAddress] = watch;
 		subscribed = true;
 	}
 
@@ -936,7 +944,7 @@ bool BluetoothA2dpProfileService::disableDelayReporting(LSMessage &message)
 	return true;
 }
 
-void BluetoothA2dpProfileService::handleGetCodecConfigurationClientDisappeared(const std::string &adapterAddress, const std::string &address)
+void BluetoothA2dpProfileService::handleGetCodecConfigurationClientDisappeared(const std::string &/*adapterAddress*/, const std::string &address)
 {
 	auto watchIter = mGetCodecConfigurationWatches.find(address);
 	if (watchIter == mGetCodecConfigurationWatches.end())

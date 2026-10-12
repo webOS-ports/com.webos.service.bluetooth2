@@ -20,6 +20,7 @@
 #undef NDEBUG
 
 #include <iostream>
+#include <memory>
 #include <fstream>
 #include <regex>
 
@@ -73,7 +74,6 @@ BluetoothManagerService::BluetoothManagerService() :
 	mKeepAliveInterval(1),
 	mSil(0),
 	mDefaultAdapter(0),
-	mAdvertisingWatch(0),
 	mGattAnsc(0)
 #ifdef MULTI_SESSION_SUPPORT
 	,
@@ -194,11 +194,22 @@ BluetoothManagerService::~BluetoothManagerService()
 {
 	BT_DEBUG("Shutting down bluetooth manager service ...");
 
-	if (mSil)
-		delete mSil;
+	// The profiles and adapters were never deleted, so LeakSanitizer reported all of them at every exit and
+	// real leaks were lost among them. ANCS first, as it observes the GATT profile; the profiles in reverse
+	// order of creation; then the adapters; the SIL last, as they all hold pointers into it.
+	delete mGattAnsc;
+	mGattAnsc = nullptr;
 
-	if (mGattAnsc)
-		delete mGattAnsc;
+	for (auto profile = mProfiles.rbegin(); profile != mProfiles.rend(); ++profile)
+		delete *profile;
+	mProfiles.clear();
+
+	for (auto &adapter : mAdaptersInfo)
+		delete adapter.second;
+	mAdaptersInfo.clear();
+
+	delete mSil;
+	mSil = nullptr;
 
 	BluetoothSILFactory::freeSILHandle();
 }
@@ -320,7 +331,13 @@ bool BluetoothManagerService::isRequestedAdapterAvailable(LS::Message &request, 
 
 bool BluetoothManagerService::isRoleEnable(const std::string &address, const std::string &role)
 {
-	for (auto profile : findAdapterInfo(address)->getSupportedServiceClasses())
+	BluetoothManagerAdapter *adapter = findAdapterInfo(address);
+	// The adapter, the default one in particular, can be gone (adaptersChanged); these helpers are called
+	// from profile code at any time and dereferenced the lookup unchecked.
+	if (!adapter)
+		return false;
+
+	for (auto profile : adapter->getSupportedServiceClasses())
 	{
 		if(convertToLower(profile.getMnemonic()) == convertToLower(role))
 		{
@@ -404,7 +421,8 @@ int BluetoothManagerService::getAdvSize(AdvertiseData advData, bool flagRequired
 	if (advData.includeName)
 	{
 		//TODO multi adapter support required
-		size += overheadBytesPerField + findAdapterInfo(mAddress)->getName().length();
+		BluetoothManagerAdapter *adapter = findAdapterInfo(mAddress);
+		size += overheadBytesPerField + (adapter ? adapter->getName().length() : 0);
 	}
 
 	return size;
@@ -437,7 +455,10 @@ std::string BluetoothManagerService::getAddress() const
 
 bool BluetoothManagerService::isDeviceAvailable(const std::string &adapterAddress, const std::string &address) const
 {
-	auto devices = findAdapterInfo(adapterAddress)->getDevices();
+	BluetoothManagerAdapter *adapter = findAdapterInfo(adapterAddress);
+	if (!adapter)
+		return false;
+	auto devices = adapter->getDevices();
 	std::string convertedAddress = convertToLower(address);
 	auto deviceIter = devices.find(convertedAddress);
 	if (deviceIter == devices.end())
@@ -451,7 +472,10 @@ bool BluetoothManagerService::isDeviceAvailable(const std::string &adapterAddres
 
 bool BluetoothManagerService::isDeviceAvailable(const std::string &address) const
 {
-	auto devices = findAdapterInfo(mAddress)->getDevices();
+	BluetoothManagerAdapter *adapter = findAdapterInfo(mAddress);
+	if (!adapter)
+		return false;
+	auto devices = adapter->getDevices();
 	std::string convertedAddress = convertToLower(address);
 	auto deviceIter = devices.find(convertedAddress);
 	if (deviceIter == devices.end())
@@ -588,6 +612,10 @@ void BluetoothManagerService::adaptersChanged()
 		if (!found)
 		{
 			BT_INFO("MANAGER_SERVICE", 0, "adaptersChanged erasing adapter [%s] from list", it->first.c_str());
+			// The profiles kept pointers to this adapter's SIL profiles, and advertisers registered on it kept
+			// their watches; client watches calling into them later used freed objects.
+			resetProfiles(it->first);
+			removeAdvertisersOfAdapter(it->first);
 			delete it->second;
 			it = mAdaptersInfo.erase(it);
 			notifySubscribersAboutStateChange();
@@ -689,12 +717,14 @@ BluetoothManagerAdapter* BluetoothManagerService::findAdapterInfo(const std::str
 //Still used by a2dp profile
 BluetoothDevice* BluetoothManagerService::findDevice(const std::string &address) const
 {
-	return findAdapterInfo(mAddress)->findDevice(address);
+	BluetoothManagerAdapter *adapter = findAdapterInfo(mAddress);
+	return adapter ? adapter->findDevice(address) : nullptr;
 }
 
 BluetoothDevice* BluetoothManagerService::findDevice(const std::string &adapterAddress, const std::string &address) const
 {
-	return findAdapterInfo(adapterAddress)->findDevice(address);
+	BluetoothManagerAdapter *adapter = findAdapterInfo(adapterAddress);
+	return adapter ? adapter->findDevice(address) : nullptr;
 }
 
 void BluetoothManagerService::updateFromAdapterAddressForQueryAvailable(BluetoothAdapter *adapter, const BluetoothProperty &property)
@@ -805,27 +835,31 @@ BluetoothAdapter* BluetoothManagerService::getAdapter(const std::string &address
 bool BluetoothManagerService::setPairableState(const std::string &adapterAddress, bool value)
 {
 	BT_DEBUG("Setting pairable to %d", value);
-	bool retVal = false;
 
-	auto pairableCB = [this, &retVal, adapterAddress](BluetoothError error) {
-		if (error == BLUETOOTH_ERROR_NONE)
-		{
-			BT_DEBUG("Pairable value set in SIL with no errors");
-			findAdapterInfo(adapterAddress)->getPairState().setPairable(true);
-			notifySubscribersAboutStateChange();
-			retVal = true;
-		}
+	// The result is known on return only if the SIL calls back before setAdapterProperty() returns, which
+	// bluez5's does. Its API allows a later callback, so the flag lives on the heap rather than in this
+	// frame, which the callback used to write to by reference.
+	auto retVal = std::make_shared<bool>(false);
+
+	auto pairableCB = [this, retVal, adapterAddress, value](BluetoothError error) {
+		if (error != BLUETOOTH_ERROR_NONE)
+			return;
+
+		BT_DEBUG("Pairable value set in SIL with no errors");
+		BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+		if (adapterInfo)
+			adapterInfo->getPairState().setPairable(value);	// was always true, also when turning it off
+		notifySubscribersAboutStateChange();
+		*retVal = true;
 	};
-        if(findAdapterInfo(adapterAddress) && findAdapterInfo(adapterAddress)->getAdapter())
-        {
-	    findAdapterInfo(adapterAddress)->getAdapter()->setAdapterProperty(BluetoothProperty(BluetoothProperty::Type::PAIRABLE, value), pairableCB);
-        }
-        else
-        {
-            BT_DEBUG("Adapter not found for address: %s", adapterAddress.c_str());
-        }
 
-	return retVal;
+	BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+	if (adapterInfo && adapterInfo->getAdapter())
+		adapterInfo->getAdapter()->setAdapterProperty(BluetoothProperty(BluetoothProperty::Type::PAIRABLE, value), pairableCB);
+	else
+		BT_DEBUG("Adapter not found for address: %s", adapterAddress.c_str());
+
+	return *retVal;
 }
 
 #ifdef MULTI_SESSION_SUPPORT
@@ -1017,8 +1051,6 @@ bool BluetoothManagerService::startFilteringDiscovery(LSMessage &message)
 	}
 
 	std::string adapterAddress;
-	std::string typeOfDevice;
-	std::string accessCode;
 	TransportType transportType = TransportType::BT_TRANSPORT_TYPE_NONE;
 	InquiryAccessCode inquiryAccessCode = InquiryAccessCode::BT_ACCESS_CODE_NONE; // CID 166097
 
@@ -2275,62 +2307,124 @@ bool BluetoothManagerService::notifyAdvertisingDisabled(uint8_t advertiserId)
 	responseObj.put("subscribed", false);
 	responseObj.put("adapterAddress", mAddress);
 	responseObj.put("returnValue", true);
-	LSUtils::postToClient(mAdvertisingWatch->getMessage(), responseObj);
+	postToAdvertiserClient(advertiserId, responseObj);
 
 	return true;
+}
+
+void BluetoothManagerService::postToAdvertiserClient(uint8_t advertiserId, pbnjson::JValue &responseObj)
+{
+	auto watch = mAdvertisingWatches.find(advertiserId);
+	if (watch != mAdvertisingWatches.end())
+		LSUtils::postToClient(watch->second->getMessage(), responseObj);
+}
+
+void BluetoothManagerService::removeAdvertisersOfAdapter(const std::string &adapterAddress)
+{
+	for (auto it = mAdvIdAdapterMap.begin(); it != mAdvIdAdapterMap.end(); )
+	{
+		if (convertToLower(it->second) != convertToLower(adapterAddress))
+		{
+			++it;
+			continue;
+		}
+
+		uint8_t advertiserId = it->first;
+		pbnjson::JValue responseObj = pbnjson::Object();
+		responseObj.put("adapterAddress", adapterAddress);
+		responseObj.put("advertiserId", advertiserId);
+		responseObj.put("subscribed", false);
+		responseObj.put("returnValue", false);
+		responseObj.put("errorCode", (int32_t)BT_ERR_ADAPTER_NOT_AVAILABLE);
+		responseObj.put("errorText", retrieveErrorText(BT_ERR_ADAPTER_NOT_AVAILABLE));
+		postToAdvertiserClient(advertiserId, responseObj);
+		removeAdvertiserWatch(advertiserId);
+		it = mAdvIdAdapterMap.erase(it);
+	}
+}
+
+void BluetoothManagerService::removeAdvertiserWatch(uint8_t advertiserId)
+{
+	auto watch = mAdvertisingWatches.find(advertiserId);
+	if (watch == mAdvertisingWatches.end())
+		return;
+
+	LSUtils::ClientWatch *clientWatch = watch->second;
+	mAdvertisingWatches.erase(watch);
+	delete clientWatch;
 }
 
 bool BluetoothManagerService::notifyAdvertisingDropped(uint8_t advertiserId)
 {
 	BT_DEBUG("Advertiser(%d) dropped", advertiserId);
 
-	std::string adapterAddress = mAdvIdAdapterMap[advertiserId];
-
-	if (adapterAddress.empty())
+	auto adapterIter = mAdvIdAdapterMap.find(advertiserId);
+	if (adapterIter == mAdvIdAdapterMap.end() || adapterIter->second.empty())
 		return true;
 
-	auto leAdvEnableCallback = [this, advertiserId, adapterAddress](BluetoothError enableError)
+	disableAndUnregisterAdvertiser(adapterIter->second, advertiserId);
+	return true;
+}
+
+// Disables an advertiser, unregisters it and tells the client that registered it, whose watch then goes.
+// Used by disableAdvertising and when a startAdvertising client goes away.
+void BluetoothManagerService::disableAndUnregisterAdvertiser(const std::string &adapterAddress, uint8_t advertiserId)
+{
+	auto unregisterAdvCallback = [this, adapterAddress, advertiserId](BluetoothError registerError)
 	{
-		auto unregisterAdvCallback = [this,adapterAddress, advertiserId](BluetoothError registerError)
+		pbnjson::JValue responseObj = pbnjson::Object();
+
+		if (BLUETOOTH_ERROR_NONE == registerError)
 		{
-			pbnjson::JValue responseObj = pbnjson::Object();
+			notifySubscribersAdvertisingChanged(adapterAddress);
+			responseObj.put("advertiserId", advertiserId);
+		}
+		else
+		{
+			appendErrorResponse(responseObj, registerError);
+		}
 
-			if (BLUETOOTH_ERROR_NONE == registerError)
-			{
-				notifySubscribersAdvertisingChanged(adapterAddress);
-				responseObj.put("advertiserId", advertiserId);
-			}
-			else
-			{
-				appendErrorResponse(responseObj, registerError);
-			}
+		responseObj.put("adapterAddress", mAddress);
+		responseObj.put("subscribed", false);
+		responseObj.put("returnValue", true);
+		postToAdvertiserClient(advertiserId, responseObj);
+		removeAdvertiserWatch(advertiserId);
+		mAdvIdAdapterMap.erase(advertiserId);
+	};
 
-			responseObj.put("adapterAddress", mAddress);
-			responseObj.put("subscribed", false);
-			responseObj.put("returnValue", true);
-			LSUtils::postToClient(mAdvertisingWatch->getMessage(), responseObj);
-			auto itr = mAdvIdAdapterMap.find(advertiserId);
-			if (itr != mAdvIdAdapterMap.end())
-				mAdvIdAdapterMap.erase(itr);
-		};
-		findAdapterInfo(adapterAddress)->getAdapter()->unregisterAdvertiser(advertiserId, unregisterAdvCallback);
+	auto leAdvEnableCallback = [this, advertiserId, adapterAddress, unregisterAdvCallback](BluetoothError enableError)
+	{
+		// The adapter can have gone away while the disable was pending.
+		BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+		if (adapterInfo)
+			adapterInfo->getAdapter()->unregisterAdvertiser(advertiserId, unregisterAdvCallback);
 
 		if (enableError != BLUETOOTH_ERROR_NONE)
 		{
 			pbnjson::JValue responseObj = pbnjson::Object();
 			responseObj.put("adapterAddress", adapterAddress);
 			appendErrorResponse(responseObj, enableError);
-			LSUtils::postToClient(mAdvertisingWatch->getMessage(), responseObj);
+			postToAdvertiserClient(advertiserId, responseObj);
 		}
+
+		if (!adapterInfo)
+			unregisterAdvCallback(BLUETOOTH_ERROR_FAIL);
 	};
 
-	findAdapterInfo(adapterAddress)->getAdapter()->disableAdvertiser(advertiserId, leAdvEnableCallback);
-	return true;
+	BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+	if (!adapterInfo)
+	{
+		removeAdvertiserWatch(advertiserId);
+		mAdvIdAdapterMap.erase(advertiserId);
+		return;
+	}
+	adapterInfo->getAdapter()->disableAdvertiser(advertiserId, leAdvEnableCallback);
 }
 
 bool BluetoothManagerService::getPowered(const std::string &address)
 {
-	return findAdapterInfo(address)->getPowerState();
+	BluetoothManagerAdapter *adapter = findAdapterInfo(address);
+	return adapter && adapter->getPowerState();
 }
 
 
@@ -2511,8 +2605,9 @@ bool BluetoothManagerService::setAdvertiseData(LSMessage &message, pbnjson::JVal
 	LS::Message request(&message);
 	AdvertiseData *advData = &data;
 
+	// Runs while the request is handled, so it needs no reference of its own; the one it took was released
+	// only on its error paths.
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
 
 	BluetoothLowEnergyServiceList serviceList;
 	auto advertiseObj = isScanRsp ? value["scanResponse"] : value["advertiseData"];
@@ -2546,7 +2641,6 @@ bool BluetoothManagerService::setAdvertiseData(LSMessage &message, pbnjson::JVal
 					responseObj.put("errorCode", BT_ERR_BLE_ADV_UUID_FAIL);
 
 					LSUtils::postToClient(requestMessage,responseObj);
-					LSMessageUnref(requestMessage);
 					return false;
 				}
 			}
@@ -2559,7 +2653,6 @@ bool BluetoothManagerService::setAdvertiseData(LSMessage &message, pbnjson::JVal
 				responseObj.put("errorCode", BT_ERR_BLE_ADV_SERVICE_DATA_FAIL);
 
 				LSUtils::postToClient(requestMessage,responseObj);
-				LSMessageUnref(requestMessage);
 				return false;
 			}
 			else
@@ -2617,7 +2710,8 @@ bool BluetoothManagerService::setAdvertiseData(LSMessage &message, pbnjson::JVal
 				responseObj.put("errorCode", BT_ERR_BLE_ADV_CONFIG_FAIL);
 
 				LSUtils::postToClient(requestMessage,responseObj);
-				LSMessageUnref(requestMessage);
+				// The error used to be sent and advertising started anyway, with a second reply.
+				return false;
 			}
 			else
 			{
@@ -2702,16 +2796,30 @@ bool BluetoothManagerService::startAdvertising(LSMessage &message)
 			return true;
 	}
 
+	// The second test used to be advertiseData again, so a request with only a scanResponse took the legacy
+	// path below and lost it.
+	const bool registerAdvertiser = requestObj.hasKey("settings") || requestObj.hasKey("advertiseData") ||
+	                                requestObj.hasKey("scanResponse");
+
+	if (registerAdvertiser && (getAdvSize(advInfo.advertiseData, true) > MAX_ADVERTISING_DATA_BYTES ||
+	                           getAdvSize(advInfo.scanResponse, false) > MAX_ADVERTISING_DATA_BYTES))
+	{
+		LSUtils::respondWithError(request, BT_ERR_BLE_ADV_EXCEED_SIZE_LIMIT);
+		return true;
+	}
+
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	if (requestObj.hasKey("settings") || requestObj.hasKey("advertiseData") || requestObj.hasKey("advertiseData"))
+	if (registerAdvertiser)
 	{
-		mAdvertisingWatch = new LSUtils::ClientWatch(get(), &message, nullptr);
-		auto leRegisterAdvCallback = [this,requestMessage,advInfo,adapterAddress](BluetoothError error, uint8_t advertiserId) {
+		// The watch belongs to the advertiser this call registers; it carries the disable and drop notices.
+		LSUtils::ClientWatch *watch = new LSUtils::ClientWatch(get(), &message, nullptr);
+		auto leRegisterAdvCallback = [this,requestMessage,advInfo,adapterAddress,watch](BluetoothError error, uint8_t advertiserId) {
 
 			pbnjson::JValue responseObj = pbnjson::Object();
-			if (BLUETOOTH_ERROR_NONE == error)
+			BluetoothManagerAdapter *adapterInfo = findAdapterInfo(adapterAddress);
+			if (BLUETOOTH_ERROR_NONE == error && adapterInfo)
 			{
 				auto leStartAdvCallback = [this,requestMessage,advertiserId,adapterAddress](BluetoothError error) {
 					pbnjson::JValue responseObj = pbnjson::Object();
@@ -2728,32 +2836,29 @@ bool BluetoothManagerService::startAdvertising(LSMessage &message)
 					{
 						responseObj.put("adapterAddress", adapterAddress);
 						appendErrorResponse(responseObj, error);
+						removeAdvertiserWatch(advertiserId);
 					}
 					LSUtils::postToClient(requestMessage, responseObj);
 					LSMessageUnref(requestMessage);
 				};
 
+				removeAdvertiserWatch(advertiserId);
+				mAdvertisingWatches[advertiserId] = watch;
 				LS::Message request(requestMessage);
 				if(request.isSubscription())
-					mAdvertisingWatch->setCallback(std::bind(&BluetoothManagerService::notifyAdvertisingDropped, this, advertiserId));
+					watch->setCallback(std::bind(&BluetoothManagerService::notifyAdvertisingDropped, this, advertiserId));
 
-				findAdapterInfo(adapterAddress)->getAdapter()->startAdvertising(advertiserId, advInfo.settings, advInfo.advertiseData, advInfo.scanResponse, leStartAdvCallback);
+				adapterInfo->getAdapter()->startAdvertising(advertiserId, advInfo.settings, advInfo.advertiseData, advInfo.scanResponse, leStartAdvCallback);
 			}
 			else
 			{
+				delete watch;
 				responseObj.put("adapterAddress", adapterAddress);
-				appendErrorResponse(responseObj, error);
+				appendErrorResponse(responseObj, BLUETOOTH_ERROR_NONE == error ? BLUETOOTH_ERROR_FAIL : error);
 				LSUtils::postToClient(requestMessage, responseObj);
 				LSMessageUnref(requestMessage);
 			}
 		};
-
-		if (getAdvSize(advInfo.advertiseData, true) > MAX_ADVERTISING_DATA_BYTES ||
-						getAdvSize(advInfo.scanResponse, false) > MAX_ADVERTISING_DATA_BYTES)
-		{
-			LSUtils::respondWithError(request, BT_ERR_BLE_ADV_EXCEED_SIZE_LIMIT);
-			return true;
-		}
 
 		findAdapterInfo(adapterAddress)->getAdapter()->registerAdvertiser(leRegisterAdvCallback);
 	}
@@ -2817,45 +2922,7 @@ bool BluetoothManagerService::disableAdvertising(LSMessage &message)
 	if (!isRequestedAdapterAvailable(request, requestObj, adapterAddress))
 		return true;
 
-	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
-
-	auto leAdvEnableCallback = [this, advertiserId, adapterAddress](BluetoothError error)
-	{
-		auto unregisterAdvCallback = [this,adapterAddress, advertiserId](BluetoothError error)
-		{
-			pbnjson::JValue responseObj = pbnjson::Object();
-
-			if (BLUETOOTH_ERROR_NONE == error)
-			{
-				notifySubscribersAdvertisingChanged(adapterAddress);
-				responseObj.put("advertiserId", advertiserId);
-			}
-			else
-			{
-				appendErrorResponse(responseObj, error);
-			}
-
-			responseObj.put("adapterAddress", mAddress);
-			responseObj.put("subscribed", false);
-			responseObj.put("returnValue", true);
-			LSUtils::postToClient(mAdvertisingWatch->getMessage(), responseObj);
-			auto itr = mAdvIdAdapterMap.find(advertiserId);
-			if (itr != mAdvIdAdapterMap.end())
-				mAdvIdAdapterMap.erase(itr);
-		};
-		findAdapterInfo(adapterAddress)->getAdapter()->unregisterAdvertiser(advertiserId, unregisterAdvCallback);
-
-		if (error != BLUETOOTH_ERROR_NONE)
-		{
-			pbnjson::JValue responseObj = pbnjson::Object();
-			responseObj.put("adapterAddress", adapterAddress);
-			appendErrorResponse(responseObj, error);
-			LSUtils::postToClient(mAdvertisingWatch->getMessage(), responseObj);
-		}
-	};
-
-	findAdapterInfo(adapterAddress)->getAdapter()->disableAdvertiser(advertiserId, leAdvEnableCallback);
+	disableAndUnregisterAdvertiser(adapterAddress, advertiserId);
 
 	pbnjson::JValue responseObj = pbnjson::Object();
 	responseObj.put("advertiserId", advertiserId);
@@ -2923,8 +2990,15 @@ bool BluetoothManagerService::updateAdvertising(LSMessage &message)
 			advInfo.settings.timeout = settingsObj["timeout"].asNumber<int32_t>();
 	}
 
+	// Parse both before changing anything, so an invalid scanResponse cannot follow an applied advertiseData.
+	if (requestObj.hasKey("advertiseData") && !setAdvertiseData(message, requestObj, advInfo.advertiseData, false))
+		return true;
+	if (requestObj.hasKey("scanResponse") && !setAdvertiseData(message, requestObj, advInfo.scanResponse, true))
+		return true;
+
+	// Each SIL call holds its own reference and releases it however it ends. One reference used to be shared
+	// by both calls and released only on an error, so it leaked on success and could be released twice.
 	LSMessage *requestMessage = request.get();
-	LSMessageRef(requestMessage);
 	auto leUpdateAdvCallback = [requestMessage,adapterAddress](BluetoothError error) {
 		if (BLUETOOTH_ERROR_NONE != error)
 		{
@@ -2932,23 +3006,19 @@ bool BluetoothManagerService::updateAdvertising(LSMessage &message)
 			responseObj.put("adapterAddress", adapterAddress);
 			appendErrorResponse(responseObj, error);
 			LSUtils::postToClient(requestMessage, responseObj);
-			LSMessageUnref(requestMessage);
 		}
+		LSMessageUnref(requestMessage);
 	};
 
-	if(requestObj.hasKey("advertiseData"))
+	if (requestObj.hasKey("advertiseData"))
 	{
-		if(!setAdvertiseData(message, requestObj,advInfo.advertiseData, false))
-			return true;
-
+		LSMessageRef(requestMessage);
 		findAdapterInfo(adapterAddress)->getAdapter()->setAdvertiserData(advertiserId, false, advInfo.advertiseData, leUpdateAdvCallback);
 	}
 
-	if(requestObj.hasKey("scanResponse"))
+	if (requestObj.hasKey("scanResponse"))
 	{
-		if(!setAdvertiseData(message, requestObj, advInfo.scanResponse, true))
-			return true;
-
+		LSMessageRef(requestMessage);
 		findAdapterInfo(adapterAddress)->getAdapter()->setAdvertiserData(advertiserId, true, advInfo.scanResponse, leUpdateAdvCallback);
 	}
 

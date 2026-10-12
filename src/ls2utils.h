@@ -18,8 +18,10 @@
 #ifndef LS2_UTILS_H_
 #define LS2_UTILS_H_
 
+#include <memory>
 #include <string>
 #include <pbnjson.hpp>
+#include <PmLogLib.h>
 #include <luna-service2/lunaservice.hpp>
 #include "bluetootherrors.h"
 #include <vector>
@@ -30,7 +32,7 @@
 	constexpr static const LSMethod LS_CATEGORY_TABLE_NAME(name)[] = {
 
 #define LS_CREATE_CATEGORY_BEGIN(cl, name) \
-	typedef cl cl_t; \
+	using cl_t [[maybe_unused]] = cl; \
 	constexpr static const LSMethod LS_CATEGORY_TABLE_NAME(name)[] = {
 
 #define LS_CATEGORY_MAPPED_METHOD(name, func) { #name, \
@@ -42,7 +44,7 @@
 	static_cast<LSMethodFlags>(0) },
 
 #define LS_CREATE_CATEGORY_END \
-{ nullptr, nullptr } \
+{ nullptr, nullptr, static_cast<LSMethodFlags>(0) } \
 	};
 
 // Build a schema as a const char * string without any execution overhead
@@ -90,6 +92,15 @@
 
 namespace LSUtils
 {
+
+// Takes a reference to \p message that is released when the last copy of the returned pointer goes. A callback
+// that captures it releases the message however it ends, or when the SIL drops it without calling it; code
+// that referenced the message by hand had to unreference it on every path, and most paths did not.
+inline std::shared_ptr<LSMessage> referenceMessage(LSMessage *message)
+{
+	LSMessageRef(message);
+	return std::shared_ptr<LSMessage>(message, LSMessageUnref);
+}
 
 inline bool generatePayload(const pbnjson::JValue &object, std::string &payload)
 {
@@ -153,7 +164,16 @@ inline void respondWithError(LS::Message &message, const std::string& errorText,
 	std::string payload;
 	generatePayload(responseObj, payload);
 
-	message.respond(payload.c_str());
+	// As in postToClient: respond() throws LS::Error when the reply cannot be sent (the client is gone), and
+	// this runs from SIL and LS2 callbacks, where nothing catches it and the service would end.
+	try
+	{
+		message.respond(payload.c_str());
+	}
+	catch (LS::Error &error)
+	{
+		PmLogError(PmLogGetLibContext(), "LS2_FAILED_TO_SEND", 0, "Failed to submit error response: %s", error.what());
+	}
 }
 
 inline void respondWithError(LSMessage *message, const std::string& errorText, unsigned int errorCode = -1)
@@ -224,6 +244,7 @@ DisplaySetId getDisplaySetIdIndex(const std::string &deviceSetId);
 
 bool callDb8MeshFindToken(LS::Handle *serviceHandle, std::string &token);
 bool callDb8MeshSetToken(LS::Handle *serviceHandle, std::string &token);
+bool callDb8MeshDeleteNetwork(LS::Handle *serviceHandle);
 bool callDb8MeshPutAppKey(LS::Handle *serviceHandle, uint16_t appKeyInex,
 							const std::string &appName);
 bool callDb8MeshGetAppKeys(LS::Handle *serviceHandle, pbnjson::JValue &result);

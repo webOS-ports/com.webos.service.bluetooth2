@@ -381,7 +381,7 @@ void BluetoothHfpProfileService::handleOpenScoClientDisappeared(const std::strin
 	if (!getImpl<BluetoothHfpProfile>())
 		return;
 
-	auto closeScoCallback = [this, address, adapterAddress](BluetoothError error) {
+	auto closeScoCallback = [this, address, adapterAddress](BluetoothError /*error*/) {
 		removeOpenScoWatchForDevice(address, true, false);
 	};
 
@@ -492,6 +492,7 @@ bool BluetoothHfpProfileService::closeSCO(LSMessage &message)
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
 			LSUtils::respondWithError(request, BT_ERR_HFP_CLOSE_SCO_FAILED);
+			LSMessageUnref(requestMessage);	// leaked, as on success
 			return;
 		}
 
@@ -502,6 +503,7 @@ bool BluetoothHfpProfileService::closeSCO(LSMessage &message)
 		LSUtils::postToClient(request, responseObj);
 
 		removeOpenScoWatchForDevice(deviceAddress, true, false);
+		LSMessageUnref(requestMessage);
 	};
 
 	getImpl<BluetoothHfpProfile>()->closeSCO(deviceAddress, closeScoCallback);
@@ -1119,7 +1121,8 @@ void BluetoothHfpProfileService::startRinging(const std::string &address, const 
 	}
  }
 
-void BluetoothHfpProfileService::stopRinging(const std::string &address)
+// By value: the indicateCall watch calls this with the address it captured, and the watch is deleted here.
+void BluetoothHfpProfileService::stopRinging(const std::string address)
 {
 	auto indicateCallIter = mIndicateCallWatches.find(address);
 	if (indicateCallIter != mIndicateCallWatches.end())
@@ -1149,7 +1152,15 @@ void BluetoothHfpProfileService::sendRingResultCode(const std::string &address)
 	if (NULL == indicateCallWatch)
 		return;
 
-	BluetoothError error = getImpl<BluetoothHfpProfile>()->sendResultCode(address, "RING");
+	// Runs from the ring timer, possibly after the adapter's profile went.
+	BluetoothHfpProfile *impl = getImpl<BluetoothHfpProfile>();
+	if (!impl)
+	{
+		stopRinging(address);
+		return;
+	}
+
+	BluetoothError error = impl->sendResultCode(address, "RING");
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
 		if (BLUETOOTH_ERROR_NOT_ALLOWED == error)
@@ -1169,9 +1180,17 @@ void BluetoothHfpProfileService::sendCLIPResultCode(const std::string &address)
 	LSUtils::ClientWatch *indicateCallWatch = indicateCallIter->second.second.second;
 	if (NULL == indicateCallWatch)
 		return;
+
+	// Runs from the ring timer, possibly after the adapter's profile went.
+	BluetoothHfpProfile *impl = getImpl<BluetoothHfpProfile>();
+	if (!impl)
+	{
+		stopRinging(address);
+		return;
+	}
 	std::string phoneNumber = indicateCallIter->second.first;
 
-	BluetoothError error = getImpl<BluetoothHfpProfile>()->sendResultCode(address, "+CLIP:" + phoneNumber);
+	BluetoothError error = impl->sendResultCode(address, "+CLIP:" + phoneNumber);
 	if (BLUETOOTH_ERROR_NONE != error)
 	{
 		if (BLUETOOTH_ERROR_NOT_ALLOWED == error)
