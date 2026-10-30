@@ -18,11 +18,6 @@
 #ifndef BLUETOOTHA2DPPROFILESERVICE_H
 #define BLUETOOTHA2DPPROFILESERVICE_H
 
-#include <set>
-
-#include <glib.h>
-
-#include "audioreconnect.h"
 #include <string>
 #include <map>
 #include <memory>
@@ -107,14 +102,6 @@ public:
 	void aptxConfigurationChanged(const std::string &address, const BluetoothAptxConfiguration &aptxConfiguration) override;
 	void delayReportChanged(const std::string &adapterAddress, const std::string &address, uint16_t delay) override;
 
-	using BluetoothProfileService::propertiesChanged;
-	void propertiesChanged(const std::string &adapterAddress, const std::string &address,
-	                       BluetoothPropertiesList properties) override;
-
-	//! The adapter has been powered on: connect the headset it had last, once
-	//! the adapter and the device are ready for it. See audioreconnect.h.
-	void adapterPowered(const std::string &adapterAddress);
-
 protected:
 	pbnjson::JValue buildGetStatusResp(bool connected, bool connecting, bool subscribed, bool returnValue,
                                               std::string adapterAddress, std::string deviceAddress) override;
@@ -150,22 +137,6 @@ private:
 	typedef std::unordered_map<std::string, std::unique_ptr<LS::SubscriptionPoint>> DeviceSubscriptionMap;
 	std::unordered_map<std::string, DeviceSubscriptionMap> mGetDelayReportSubscriptions;
 	std::map<std::string, uint16_t> mRemoteDelay;
-
-	struct ReconnectTimer
-	{
-		BluetoothA2dpProfileService *self;
-		std::string adapterAddress;
-		unsigned int attempt;
-	};
-	static gboolean handleReconnectTimeout(gpointer data);
-	static void freeReconnectTimer(gpointer data);
-	void scheduleReconnect(const std::string &adapterAddress, unsigned int attempt);
-	void reconnect(const std::string &adapterAddress, unsigned int attempt);
-	void loadReconnect();
-	void storeReconnect();
-
-	AudioReconnect mReconnect;
-	std::set<guint> mReconnectTimers;
 };
 
 class A2DPAudioPathCheckTimeout {

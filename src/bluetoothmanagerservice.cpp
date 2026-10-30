@@ -25,6 +25,7 @@
 #include <regex>
 
 #include "bluetoothmanagerservice.h"
+#include "bluetoothaudioreconnect.h"
 #include "bluetoothdevice.h"
 #include "bluetoothsilfactory.h"
 #include "bluetoothserviceclasses.h"
@@ -98,6 +99,8 @@ BluetoothManagerService::BluetoothManagerService() :
 
 	mWoBleTriggerDevices.clear();
 	createProfiles();
+	// Before the SIL: an adapter may come up while it is being created.
+	mAudioReconnect = std::make_unique<BluetoothAudioReconnect>(this);
 
 	BT_DEBUG("Creating SIL for API version %d, capability %s", BLUETOOTH_SIL_API_VERSION, bluetoothCapability.c_str());
 	mSil = BluetoothSILFactory::create(BLUETOOTH_SIL_API_VERSION, mPairingIOCapability);
@@ -199,6 +202,9 @@ BluetoothManagerService::~BluetoothManagerService()
 	// order of creation; then the adapters; the SIL last, as they all hold pointers into it.
 	delete mGattAnsc;
 	mGattAnsc = nullptr;
+
+	// It looks the profiles up, and its timers would.
+	mAudioReconnect.reset();
 
 	for (auto profile = mProfiles.rbegin(); profile != mProfiles.rend(); ++profile)
 		delete *profile;

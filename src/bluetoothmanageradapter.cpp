@@ -26,7 +26,7 @@
 #include "ls2utils.h"
 #include "clientwatch.h"
 #include "bluetoothprofileservice.h"
-#include "bluetootha2dpprofileservice.h"
+#include "bluetoothaudioreconnect.h"
 
 using namespace std::placeholders;
 
@@ -266,14 +266,8 @@ void BluetoothManagerAdapter::adapterStateChanged(bool powered)
 
 	// The headset is not brought back by BlueZ after the stack or the chip
 	// restarted, or the adapter was switched off and on: see audioreconnect.h.
-	if (powered)
-	{
-		for (auto profile : mBluetoothManagerService->getProfiles())
-		{
-			if (profile->getName() == "A2DP")
-				static_cast<BluetoothA2dpProfileService*>(profile)->adapterPowered(mAddress);
-		}
-	}
+	if (powered && mBluetoothManagerService->getAudioReconnect())
+		mBluetoothManagerService->getAudioReconnect()->adapterPowered(mAddress);
 }
 
 void BluetoothManagerAdapter::adapterHciTimeoutOccurred()

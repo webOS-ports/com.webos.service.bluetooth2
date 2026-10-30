@@ -1,6 +1,7 @@
 {
     "bluetooth.query": [
         "com.webos.service.bluetooth2/a2dp/getStatus",
+        "com.webos.service.bluetooth2/autoReconnect/getStatus",
         "com.webos.service.bluetooth2/avrcp/getStatus",
         "com.webos.service.bluetooth2/gatt/getStatus",
         "com.webos.service.bluetooth2/hid/getStatus",
@@ -73,6 +74,8 @@
         "com.webos.service.bluetooth2/mesh/model/onOff/set"
     ],
     "bluetooth.management": [
+        "com.webos.service.bluetooth2/autoReconnect/forget",
+        "com.webos.service.bluetooth2/autoReconnect/setState",
         "com.webos.service.bluetooth2/a2dp/disconnect",
         "com.webos.service.bluetooth2/a2dp/connect",
         "com.webos.service.bluetooth2/a2dp/enableDelayReporting",
