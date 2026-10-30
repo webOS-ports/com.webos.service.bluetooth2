@@ -16,6 +16,7 @@
 
 #include "bluetootha2dpprofileservice.h"
 #include "bluetoothmanagerservice.h"
+#include "bluetoothdevice.h"
 #include "bluetootherrors.h"
 #include "ls2utils.h"
 #include "logging.h"
@@ -54,10 +55,146 @@ BluetoothA2dpProfileService::BluetoothA2dpProfileService(BluetoothManagerService
 
 	manager->registerCategory("/a2dp/internal", LS_CATEGORY_TABLE_NAME(internal), NULL, NULL);
 	manager->setCategoryData("/a2dp/internal", this);
+
+	loadReconnect();
 }
 
 BluetoothA2dpProfileService::~BluetoothA2dpProfileService()
 {
+	// Copied: removing a source frees its timer, whose handler is not called.
+	const std::set<guint> timers = mReconnectTimers;
+	for (guint id : timers)
+		g_source_remove(id);
+}
+
+/* ------------------------------------------------------------------------
+ * Connecting the headset again when an adapter comes up (audioreconnect.h)
+ * ------------------------------------------------------------------------ */
+
+namespace {
+
+// Next to adaptersAssignment.json; bluetoothd only reads the directories.
+const char kReconnectFile[] = "/var/lib/bluetooth/audioReconnect.txt";
+
+// Seconds before each attempt, counted from the adapter coming up or the
+// attempt before failing. The first waits for the adapter's devices and
+// profiles to be there, as BlueZ waits 2 s before reconnecting on resume;
+// a headset still switching itself back on gets two more chances.
+const guint kReconnectDelays[] = { 2, 10, 30 };
+const unsigned int kReconnectAttempts = sizeof(kReconnectDelays) / sizeof(kReconnectDelays[0]);
+
+}
+
+void BluetoothA2dpProfileService::loadReconnect()
+{
+	gchar *contents = nullptr;
+	if (!g_file_get_contents(kReconnectFile, &contents, nullptr, nullptr))
+		return;
+	mReconnect.fromText(contents);
+	g_free(contents);
+}
+
+void BluetoothA2dpProfileService::storeReconnect()
+{
+	GError *error = nullptr;
+	// Written to a temporary file and renamed over the old one.
+	if (!g_file_set_contents(kReconnectFile, mReconnect.toText().c_str(), -1, &error))
+	{
+		BT_WARNING("A2DP", 0, "Failed to store %s: %s", kReconnectFile, error ? error->message : "");
+		g_clear_error(&error);
+	}
+}
+
+void BluetoothA2dpProfileService::propertiesChanged(const std::string &adapterAddress, const std::string &address,
+                                                    BluetoothPropertiesList properties)
+{
+	BluetoothProfileService::propertiesChanged(adapterAddress, address, properties);
+
+	for (auto prop : properties)
+	{
+		if (prop.getType() == BluetoothProperty::Type::CONNECTED && prop.getValue<bool>() &&
+		    mReconnect.connected(adapterAddress, address))
+			storeReconnect();
+	}
+}
+
+void BluetoothA2dpProfileService::adapterPowered(const std::string &adapterAddress)
+{
+	if (mReconnect.target(adapterAddress).empty())
+		return;
+	scheduleReconnect(adapterAddress, 0);
+}
+
+void BluetoothA2dpProfileService::scheduleReconnect(const std::string &adapterAddress, unsigned int attempt)
+{
+	if (attempt >= kReconnectAttempts)
+	{
+		BT_INFO("A2DP", 0, "Gave up connecting %s again", mReconnect.target(adapterAddress).c_str());
+		return;
+	}
+	ReconnectTimer *timer = new ReconnectTimer{this, adapterAddress, attempt};
+	guint id = g_timeout_add_seconds_full(G_PRIORITY_DEFAULT, kReconnectDelays[attempt],
+	                                      &BluetoothA2dpProfileService::handleReconnectTimeout,
+	                                      timer, &BluetoothA2dpProfileService::freeReconnectTimer);
+	mReconnectTimers.insert(id);
+}
+
+gboolean BluetoothA2dpProfileService::handleReconnectTimeout(gpointer data)
+{
+	ReconnectTimer *timer = static_cast<ReconnectTimer*>(data);
+	timer->self->mReconnectTimers.erase(g_source_get_id(g_main_current_source()));
+	timer->self->reconnect(timer->adapterAddress, timer->attempt);
+	return G_SOURCE_REMOVE;
+}
+
+void BluetoothA2dpProfileService::freeReconnectTimer(gpointer data)
+{
+	delete static_cast<ReconnectTimer*>(data);
+}
+
+void BluetoothA2dpProfileService::reconnect(const std::string &adapterAddress, unsigned int attempt)
+{
+	const std::string address = mReconnect.target(adapterAddress);
+	if (address.empty() || !getManager()->getPowered(adapterAddress))
+		return;
+	if (isDeviceConnected(adapterAddress, address) || isDeviceConnecting(adapterAddress, address))
+		return;
+
+	BluetoothDevice *device = getManager()->findDevice(adapterAddress, address);
+	BluetoothProfile *impl = findImpl(adapterAddress);
+	if (!device || !impl)
+	{
+		// After a chip reset the adapter's devices and profiles come back
+		// after the adapter itself.
+		scheduleReconnect(adapterAddress, attempt + 1);
+		return;
+	}
+	if (!device->getPaired())
+	{
+		if (mReconnect.forget(adapterAddress, address))
+			storeReconnect();
+		return;
+	}
+
+	BT_INFO("A2DP", 0, "Connecting %s again (attempt %u)", address.c_str(), attempt + 1);
+	markDeviceAsConnecting(adapterAddress, address);
+	notifyStatusSubscribers(adapterAddress, address, false);
+
+	impl->connect(address, [this, adapterAddress, address, attempt](BluetoothError error) {
+		if (error == BLUETOOTH_ERROR_NONE)
+		{
+			// The SIL's CONNECTED property says so too, and clears connecting.
+			markDeviceAsConnected(adapterAddress, address);
+			return;
+		}
+
+		BT_INFO("A2DP", 0, "Connecting %s again failed: %d", address.c_str(), error);
+		markDeviceAsNotConnecting(adapterAddress, address);
+		notifyStatusSubscribers(adapterAddress, address, false);
+		// Something else has A2DP now, or the user connected it meanwhile.
+		if (error != BLUETOOTH_ERROR_DEVICE_ALREADY_CONNECTED)
+			scheduleReconnect(adapterAddress, attempt + 1);
+	});
 }
 
 void BluetoothA2dpProfileService::initialize()
