@@ -18,6 +18,8 @@
 
 #include <iterator>
 
+#include <glib.h>
+
 #include "bluetoothdevice.h"
 #include "bluetootherrors.h"
 #include "bluetoothmanagerservice.h"
@@ -28,7 +30,11 @@
 namespace {
 
 // Next to adaptersAssignment.json; bluetoothd only reads the directories.
-const char kReconnectFile[] = "/var/lib/bluetooth/audioReconnect.txt";
+// The unit tests keep theirs in their working directory.
+#ifndef AUDIO_RECONNECT_FILE
+#define AUDIO_RECONNECT_FILE "/var/lib/bluetooth/audioReconnect.txt"
+#endif
+const char kReconnectFile[] = AUDIO_RECONNECT_FILE;
 
 // Seconds before each attempt, counted from the adapter coming up or the
 // attempt before failing. The first waits for the adapter's devices and
@@ -42,10 +48,37 @@ const char *profileName(AudioReconnect::Profile profile)
 	return profile == AudioReconnect::A2DP ? "A2DP" : "HFP";
 }
 
+class MainLoopTimers : public BluetoothAudioReconnect::Timers
+{
+public:
+	unsigned int add(unsigned int seconds, std::function<void(unsigned int id)> fire) override
+	{
+		return g_timeout_add_seconds_full(G_PRIORITY_DEFAULT, seconds, &MainLoopTimers::handleTimeout,
+		                                  new std::function<void(unsigned int)>(std::move(fire)),
+		                                  &MainLoopTimers::freeTimer);
+	}
+
+	// Removing a source frees its timer; its handler is not called.
+	void remove(unsigned int id) override { g_source_remove(id); }
+
+private:
+	static gboolean handleTimeout(gpointer data)
+	{
+		(*static_cast<std::function<void(unsigned int)> *>(data))(g_source_get_id(g_main_current_source()));
+		return G_SOURCE_REMOVE;
+	}
+
+	static void freeTimer(gpointer data)
+	{
+		delete static_cast<std::function<void(unsigned int)> *>(data);
+	}
+};
+
 }
 
 BluetoothAudioReconnect::BluetoothAudioReconnect(BluetoothManagerService *manager) :
 	mManager(manager),
+	mClock(std::make_unique<MainLoopTimers>()),
 	mAlive(std::make_shared<BluetoothAudioReconnect *>(this))
 {
 	LS_CREATE_CATEGORY_BEGIN(BluetoothAudioReconnect, autoReconnect)
@@ -66,9 +99,14 @@ BluetoothAudioReconnect::~BluetoothAudioReconnect()
 	cancelTimers();
 }
 
+void BluetoothAudioReconnect::useTimers(std::unique_ptr<Timers> timers)
+{
+	cancelTimers();
+	mClock = std::move(timers);
+}
+
 void BluetoothAudioReconnect::cancelTimers(const std::string *adapterAddress)
 {
-	// Removing a source frees its timer; its handler is not called.
 	for (auto it = mTimers.begin(); it != mTimers.end();)
 	{
 		if (adapterAddress && it->second != *adapterAddress)
@@ -76,7 +114,7 @@ void BluetoothAudioReconnect::cancelTimers(const std::string *adapterAddress)
 			++it;
 			continue;
 		}
-		g_source_remove(it->first);
+		mClock->remove(it->first);
 		it = mTimers.erase(it);
 	}
 }
@@ -142,29 +180,16 @@ void BluetoothAudioReconnect::schedule(const std::string &adapterAddress, unsign
 		BT_INFO("AUDIO_RECONNECT", 0, "Gave up connecting %s again", mReconnect.target(adapterAddress).address.c_str());
 		return;
 	}
-	Timer *timer = new Timer{mAlive, adapterAddress, attempt};
-	const guint id = g_timeout_add_seconds_full(G_PRIORITY_DEFAULT, kDelays[attempt],
-	                                            &BluetoothAudioReconnect::handleTimeout,
-	                                            timer, &BluetoothAudioReconnect::freeTimer);
-	mTimers[id] = adapterAddress;
-}
-
-gboolean BluetoothAudioReconnect::handleTimeout(gpointer data)
-{
-	const Timer *timer = static_cast<Timer *>(data);
-	auto alive = timer->self.lock();
-	if (alive)
-	{
+	std::weak_ptr<BluetoothAudioReconnect *> weak = mAlive;
+	const unsigned int id = mClock->add(kDelays[attempt], [weak, adapterAddress, attempt](unsigned int fired) {
+		auto alive = weak.lock();
+		if (!alive)
+			return;
 		BluetoothAudioReconnect *self = *alive;
-		self->mTimers.erase(g_source_get_id(g_main_current_source()));
-		self->reconnect(timer->adapterAddress, timer->attempt);
-	}
-	return G_SOURCE_REMOVE;
-}
-
-void BluetoothAudioReconnect::freeTimer(gpointer data)
-{
-	delete static_cast<Timer *>(data);
+		self->mTimers.erase(fired);
+		self->reconnect(adapterAddress, attempt);
+	});
+	mTimers[id] = adapterAddress;
 }
 
 void BluetoothAudioReconnect::reconnect(const std::string &adapterAddress, unsigned int attempt)

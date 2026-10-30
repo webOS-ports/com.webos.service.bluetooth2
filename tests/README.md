@@ -35,6 +35,24 @@ The ANCS tests feed `ancsparser.cpp` data source responses cut into blocks at th
 an attribute length or an id split across blocks, a block that starts with attribute 0 (which used to be taken
 for a new header), the rest of an attribute nobody asked for.
 
+## The audio reconnect, glued in (`tests/glue/`)
+
+`webos-bluetooth-service-glue-tests` runs the real manager, the A2DP and HFP profile services and
+`BluetoothAudioReconnect` with nothing outside the process: `fakesil.cpp` is the SIL (one adapter, A2DP and HFP,
+devices the test adds), which the service's own SIL factory loads through `glue-sil.so`; `fakels.cpp` defines the
+luna-service2 calls, so a test calls `/a2dp/disconnect` or `/autoReconnect/setState` as a client would; and a
+clock the test moves stands in for the main loop's timers (`BluetoothAudioReconnect::useTimers`). It covers the
+reconnect at power-on, the attempts after 2, 10 and 30 s and giving up, leaving a headset alone that is connected
+or connecting already, a disconnect through the service forgetting the headset while one by the headset keeps it,
+`/autoReconnect/forget`, the switch, and what survives a restart of the service.
+
+    ninja webos-bluetooth-service-glue-tests
+    cd build/tests && <sysroot>/usr/lib/ld-linux-x86-64.so.2 --library-path <sysroot>/usr/lib \
+        ./webos-bluetooth-service-glue-tests
+
+`glue-sil.so` is taken from the build directory, or from `$GLUE_SIL_DIR`. What is remembered goes to `bt-test-audioReconnect.txt` in the
+current directory.
+
 ## Fuzzing (`tests/fuzz/`)
 
 `fuzz_ancsparser.cpp` is a libFuzzer target for the ANCS parser, which parses what a phone sends. It needs clang:

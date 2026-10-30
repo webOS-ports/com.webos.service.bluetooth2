@@ -17,11 +17,11 @@
 #ifndef BLUETOOTHAUDIORECONNECT_H
 #define BLUETOOTHAUDIORECONNECT_H
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
 
-#include <glib.h>
 #include <luna-service2/lunaservice.hpp>
 
 #include "audioreconnect.h"
@@ -51,6 +51,17 @@ class BluetoothProfileService;
 class BluetoothAudioReconnect
 {
 public:
+	//! Where the attempts wait: GLib's main loop, or a test's clock.
+	class Timers
+	{
+	public:
+		virtual ~Timers() = default;
+		//! fire is called once, after seconds, with the id add() gave.
+		virtual unsigned int add(unsigned int seconds, std::function<void(unsigned int id)> fire) = 0;
+		//! Before it fired: it never does.
+		virtual void remove(unsigned int id) = 0;
+	};
+
 	explicit BluetoothAudioReconnect(BluetoothManagerService *manager);
 	~BluetoothAudioReconnect();
 
@@ -66,20 +77,15 @@ public:
 	//! the adapter and the device are ready for it.
 	void adapterPowered(const std::string &adapterAddress);
 
+	//! Waits with timers from now on, instead of the main loop's; the
+	//! attempts waiting now are dropped.
+	void useTimers(std::unique_ptr<Timers> timers);
+
 	bool getStatus(LSMessage &message);
 	bool setState(LSMessage &message);
 	bool forget(LSMessage &message);
 
 private:
-	struct Timer
-	{
-		std::weak_ptr<BluetoothAudioReconnect *> self;
-		std::string adapterAddress;
-		unsigned int attempt;
-	};
-	static gboolean handleTimeout(gpointer data);
-	static void freeTimer(gpointer data);
-
 	void schedule(const std::string &adapterAddress, unsigned int attempt);
 	void reconnect(const std::string &adapterAddress, unsigned int attempt);
 	//! Those of one adapter, or of all.
@@ -90,7 +96,8 @@ private:
 
 	BluetoothManagerService *mManager;
 	AudioReconnect mReconnect;
-	std::map<guint, std::string> mTimers;	// source id -> adapter
+	std::unique_ptr<Timers> mClock;
+	std::map<unsigned int, std::string> mTimers;	// timer id -> adapter
 	LS::SubscriptionPoint mStatusSubscriptions;
 	// Handed to SIL callbacks and timers, which may outlive this.
 	std::shared_ptr<BluetoothAudioReconnect *> mAlive;
