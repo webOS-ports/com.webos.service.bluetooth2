@@ -412,6 +412,69 @@ TEST_F(AudioReconnectGlue, TheUserDisconnectingHfpThroughTheServiceForgetsTheHea
 	EXPECT_TRUE(adapter().hfp.connects.empty());
 }
 
+// The user disconnecting one profile forgets the whole device, also while
+// the other stays up (G5-9, G5-14): what they did not want back is the
+// headset, not one of its profiles.
+TEST_F(AudioReconnectGlue, TheUserDisconnectingOnlyHfpForgetsTheHeadsetWithItsA2dpStillUp)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().hfp.remote(HEADSET, true);
+	ASSERT_TRUE(succeeded(luna("/hfp", "disconnect", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	EXPECT_EQ(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos);
+
+	powerCycle();
+	clock->advance(100);
+	EXPECT_TRUE(adapter().a2dp.connects.empty());
+	EXPECT_TRUE(adapter().hfp.connects.empty());
+}
+
+// The user connecting the profile again remembers the headset with every
+// profile it has up then, not only the one just connected: the A2DP that
+// stayed up is brought back at the next power-on as well (it is the one
+// connected then, and BlueZ brings the HFP).
+TEST_F(AudioReconnectGlue, HfpConnectedAgainWhileA2dpStayedUpRemembersBoth)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().hfp.remote(HEADSET, true);
+	ASSERT_TRUE(succeeded(luna("/hfp", "disconnect", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	ASSERT_TRUE(succeeded(luna("/hfp", "connect", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(std::string(gluesil::ADAPTER) + " " + HEADSET + " a2dp hfp\n"),
+	          std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+
+	powerCycle();
+	clock->advance(2);
+	EXPECT_EQ(adapter().a2dp.connects, std::vector<std::string>{ HEADSET });
+	EXPECT_EQ(adapter().hfp.connects, std::vector<std::string>{ HEADSET }) << "only the user's connect";
+}
+
+TEST_F(AudioReconnectGlue, A2dpConnectedAgainWhileHfpStayedUpRemembersBoth)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().hfp.remote(HEADSET, true);
+	ASSERT_TRUE(succeeded(luna("/a2dp", "disconnect", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	ASSERT_TRUE(succeeded(luna("/a2dp", "connect", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(std::string(gluesil::ADAPTER) + " " + HEADSET + " a2dp hfp\n"),
+	          std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+}
+
+// An HFP link to a device that offers no hands-free unit (this phone is its
+// headset) is not one of the headset's profiles to remember.
+TEST_F(AudioReconnectGlue, AnHfpLinkOfADeviceWithoutHandsFreeIsNotRemembered)
+{
+	addHeadset(SPEAKER, { A2DP_SINK, AVRCP_TARGET });
+	adapter().power(true);
+	adapter().hfp.remote(SPEAKER, true);
+	adapter().a2dp.remote(SPEAKER, true);
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(std::string(gluesil::ADAPTER) + " " + SPEAKER + " a2dp\n"),
+	          std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+}
+
 TEST_F(AudioReconnectGlue, TheHeadsetGoingAwayKeepsIt)
 {
 	addHeadset(HEADSET);

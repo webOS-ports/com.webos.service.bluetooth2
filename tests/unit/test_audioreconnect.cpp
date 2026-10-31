@@ -116,6 +116,39 @@ TEST(AudioReconnect, AnHfpOnlyHeadsetIsConnectedByItsHfp)
 	EXPECT_EQ(r.target(kAdapter).first(), AudioReconnect::HFP);
 }
 
+TEST(AudioReconnect, EveryProfileConnectedTogetherIsRemembered)
+{
+	AudioReconnect r;
+	EXPECT_TRUE(r.connected(kAdapter, kNura, kBoth));
+	EXPECT_EQ(r.target(kAdapter).profiles, kBoth);
+	EXPECT_FALSE(r.connected(kAdapter, kNura, kBoth));
+	EXPECT_FALSE(r.connected(kAdapter, kNura, AudioReconnect::HFP));
+}
+
+// hfp/disconnect forgot it while its A2DP stayed up; hfp/connect then
+// connects HFP with A2DP still up.
+TEST(AudioReconnect, ConnectedAgainAfterAUserDisconnectItComesBackWithAllItHasUp)
+{
+	AudioReconnect r;
+	r.connected(kAdapter, kNura, AudioReconnect::A2DP);
+	r.connected(kAdapter, kNura, AudioReconnect::HFP);
+	EXPECT_TRUE(r.disconnected(kAdapter, kNura, AudioReconnect::Disconnect::ByUser));
+	EXPECT_TRUE(r.target(kAdapter).empty());
+	EXPECT_TRUE(r.connected(kAdapter, kNura, kBoth));
+	EXPECT_EQ(r.target(kAdapter).profiles, kBoth);
+	EXPECT_EQ(r.target(kAdapter).first(), AudioReconnect::A2DP);
+	EXPECT_EQ(r.toText(), std::string("autoReconnect on\n") + kAdapter + " " + kNura + " a2dp hfp\n");
+}
+
+TEST(AudioReconnect, NoKnownProfileIsNothingConnected)
+{
+	AudioReconnect r;
+	EXPECT_FALSE(r.connected(kAdapter, kNura, 0U));
+	EXPECT_TRUE(r.target(kAdapter).empty());
+	EXPECT_TRUE(r.connected(kAdapter, kNura, 1U << 5 | AudioReconnect::HFP));
+	EXPECT_EQ(r.target(kAdapter).profiles, static_cast<unsigned>(AudioReconnect::HFP));
+}
+
 TEST(AudioReconnect, AnotherDeviceBringsOnlyWhatItConnected)
 {
 	AudioReconnect r;

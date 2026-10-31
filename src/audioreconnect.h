@@ -38,7 +38,10 @@
  * disconnecting the device forgets it, so it is not brought back at the next
  * power-on; a link loss, or the device going away by itself, keeps it.
  * BlueZ reconnects after a link loss on its own (policy.c), so that is left
- * to BlueZ.
+ * to BlueZ. A disconnect of one of its profiles forgets the whole device,
+ * also while the other stays up: there is no per-profile setting here, as
+ * Android's CONNECTION_POLICY, to say only that profile is not wanted. A
+ * connect afterwards remembers it with every profile it has up then.
  *
  * One switch, on unless the user turned it off, turns connecting again off
  * altogether. What is remembered is still kept up to date while it is off,
@@ -83,9 +86,10 @@ public:
 
 	static bool isAddress(const std::string &text);
 
-	//! profile to address on adapter connected. True if that changed what is
-	//! remembered (and so has to be stored).
-	bool connected(const std::string &adapter, const std::string &address, Profile profile);
+	//! profiles (Profile bits) of address on adapter are connected: the one
+	//! that connected now, and those it had up already. True if that changed
+	//! what is remembered (and so has to be stored).
+	bool connected(const std::string &adapter, const std::string &address, unsigned profiles);
 
 	//! address on adapter disconnected. A disconnect by the user forgets the
 	//! device, and gives true if it was remembered; one by the remote side

@@ -160,7 +160,21 @@ void BluetoothAudioReconnect::profileConnectionChanged(const std::string &profil
 	BluetoothDevice *device = mManager->findDevice(adapterAddress, address);
 	if (!device || !AudioReconnect::isAudioDevice(which, device->getUuids()))
 		return;
-	if (mReconnect.connected(adapterAddress, address, which))
+
+	// With the other profile, if it stayed up: after the user disconnected
+	// and connected again only HFP, say, the device was forgotten in
+	// between, and its A2DP is to come back at the next power-on too.
+	unsigned profiles = which;
+	for (AudioReconnect::Profile other : { AudioReconnect::A2DP, AudioReconnect::HFP })
+	{
+		if (other == which)
+			continue;
+		BluetoothProfileService *service = findProfile(other);
+		if (service && service->isDeviceConnected(adapterAddress, address) &&
+		    AudioReconnect::isAudioDevice(other, device->getUuids()))
+			profiles |= other;
+	}
+	if (mReconnect.connected(adapterAddress, address, profiles))
 		store();
 }
 

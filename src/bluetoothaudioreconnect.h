@@ -46,7 +46,8 @@ class BluetoothProfileService;
  *
  * A disconnect through this service's own /a2dp/disconnect or
  * /hfp/disconnect is one by the user already, and forgets the device the
- * same way.
+ * same way, also when only that profile goes down. A connect remembers the
+ * device with every audio profile it has connected then.
  */
 class BluetoothAudioReconnect
 {

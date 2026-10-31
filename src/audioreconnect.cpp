@@ -72,23 +72,25 @@ bool AudioReconnect::isAddress(const std::string &text)
 	return true;
 }
 
-bool AudioReconnect::connected(const std::string &adapter, const std::string &address, Profile profile)
+bool AudioReconnect::connected(const std::string &adapter, const std::string &address, unsigned profiles)
 {
-	if (!isAddress(adapter) || !isAddress(address))
+	profiles &= A2DP | HFP;
+	if (profiles == 0U || !isAddress(adapter) || !isAddress(address))
 		return false;
 
 	Target &last = mLast[lower(adapter)];
 	const std::string device = lower(address);
 	if (last.address != device)
 	{
-		// Another device: only what it connected counts.
+		// Another device, or this one again after the user disconnected
+		// it: only what it has connected counts.
 		last.address = device;
-		last.profiles = profile;
+		last.profiles = profiles;
 		return true;
 	}
-	if ((last.profiles & profile) != 0U)
+	if ((last.profiles & profiles) == profiles)
 		return false;
-	last.profiles |= profile;
+	last.profiles |= profiles;
 	return true;
 }
 
