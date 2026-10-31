@@ -194,6 +194,26 @@ void Adapter::addDevice(const std::string &address, bool paired, const std::vect
 	getObserver()->deviceFound(address, properties);
 }
 
+void Adapter::unpair(const std::string &address, BluetoothResultCallback callback)
+{
+	if (!unpairWorks || mDevices.count(address) == 0)
+	{
+		callback(BLUETOOTH_ERROR_FAIL);
+		return;
+	}
+	removeDevice(address);
+	callback(BLUETOOTH_ERROR_NONE);
+}
+
+void Adapter::removeDevice(const std::string &address)
+{
+	if (mDevices.erase(address) == 0)
+		return;
+	a2dp.remote(address, false);
+	hfp.remote(address, false);
+	getObserver()->deviceRemoved(address);
+}
+
 void Adapter::setPaired(const std::string &address, bool paired)
 {
 	BluetoothPropertiesList properties;

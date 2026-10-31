@@ -178,6 +178,17 @@ void BluetoothAudioReconnect::profileConnectionChanged(const std::string &profil
 		store();
 }
 
+void BluetoothAudioReconnect::deviceUnpaired(const std::string &adapterAddress, const std::string &address)
+{
+	// BlueZ takes the profiles down before it removes the device, which
+	// looked like a link loss and kept it.
+	if (mReconnect.forget(adapterAddress, address))
+	{
+		BT_INFO("AUDIO_RECONNECT", 0, "%s unpaired, not connecting it again", address.c_str());
+		store();
+	}
+}
+
 void BluetoothAudioReconnect::adapterPowered(const std::string &adapterAddress)
 {
 	// Powered again before the last attempts are done: start over.
@@ -230,8 +241,17 @@ void BluetoothAudioReconnect::reconnect(const std::string &adapterAddress, unsig
 	if (!device)
 	{
 		// After a chip reset the adapter's devices come back after the
-		// adapter itself.
-		schedule(adapterAddress, attempt + 1);
+		// adapter itself. A device removed from BlueZ (unpaired behind this
+		// service's back) looks the same until then; one still not there
+		// at the last attempt is gone, and not to be tried at every
+		// power-on.
+		if (attempt + 1 < kAttempts)
+			schedule(adapterAddress, attempt + 1);
+		else if (mReconnect.forget(adapterAddress, target.address))
+		{
+			BT_INFO("AUDIO_RECONNECT", 0, "%s is no longer known, not connecting it again", target.address.c_str());
+			store();
+		}
 		return;
 	}
 	if (!device->getPaired())

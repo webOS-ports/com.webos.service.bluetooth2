@@ -44,6 +44,10 @@ class BluetoothProfileService;
  *       do not bring it back at the next power-on. Without adapterAddress,
  *       on every adapter.
  *
+ * Unpairing through /adapter/unpair forgets the device as well. One BlueZ
+ * no longer knows by the last attempt after a power-on (removed behind this
+ * service's back) is forgotten then.
+ *
  * A disconnect through this service's own /a2dp/disconnect or
  * /hfp/disconnect is one by the user already, and forgets the device the
  * same way, also when only that profile goes down. A connect remembers the
@@ -73,6 +77,10 @@ public:
 	//! byUser: the disconnect was asked for through this service.
 	void profileConnectionChanged(const std::string &profile, const std::string &adapterAddress,
 	                              const std::string &address, bool connected, bool byUser);
+
+	//! The user unpaired address on adapterAddress through this service: do
+	//! not bring it back.
+	void deviceUnpaired(const std::string &adapterAddress, const std::string &address);
 
 	//! The adapter has been powered on: connect the device it had last, once
 	//! the adapter and the device are ready for it.

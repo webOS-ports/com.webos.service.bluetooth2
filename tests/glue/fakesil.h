@@ -111,7 +111,8 @@ public:
 	BluetoothError supplyPairingConfirmation(const std::string &, bool) override { return BLUETOOTH_ERROR_NONE; }
 	BluetoothError supplyPairingSecret(const std::string &, const std::string &) override { return BLUETOOTH_ERROR_NONE; }
 	BluetoothError supplyPairingSecret(const std::string &, BluetoothPasskey) override { return BLUETOOTH_ERROR_NONE; }
-	void unpair(const std::string &, BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_FAIL); }
+	//! As bluez5's RemoveDevice: when unpairWorks, the device's profiles go down, the device goes, then the answer.
+	void unpair(const std::string &address, BluetoothResultCallback callback) override;
 	void cancelPairing(const std::string &, BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
 	void startAdvertising(BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
 	void stopAdvertising(BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
@@ -126,6 +127,10 @@ public:
 	//! A device the adapter knows, paired or not, offering uuids.
 	void addDevice(const std::string &address, bool paired, const std::vector<std::string> &uuids);
 	void setPaired(const std::string &address, bool paired);
+	//! BlueZ no longer has the device (removed behind the service's back, as bluetoothctl remove does).
+	void removeDevice(const std::string &address);
+
+	bool unpairWorks = false;
 
 private:
 	std::map<std::string, BluetoothPropertiesList> mDevices;

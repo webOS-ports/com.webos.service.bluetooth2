@@ -662,6 +662,112 @@ TEST_F(AudioReconnectGlue, AHeadsetNoLongerPairedIsForgotten)
 	EXPECT_EQ(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos);
 }
 
+// G5-5: unpairing through the service forgets the headset at once. BlueZ's
+// RemoveDevice takes its profiles down first, which the service cannot tell
+// from a link loss.
+TEST_F(AudioReconnectGlue, TheUserUnpairingTheHeadsetForgetsIt)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().hfp.remote(HEADSET, true);
+	adapter().unpairWorks = true;
+
+	ASSERT_TRUE(succeeded(luna("/adapter", "unpair", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	EXPECT_EQ(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+
+	powerCycle();
+	clock->advance(100);
+	EXPECT_TRUE(clock->waits.empty()) << "nothing left to connect";
+	EXPECT_TRUE(adapter().a2dp.connects.empty());
+	EXPECT_TRUE(adapter().hfp.connects.empty());
+}
+
+TEST_F(AudioReconnectGlue, AnUnpairThatFailsKeepsTheHeadset)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+
+	EXPECT_FALSE(succeeded(luna("/adapter", "unpair", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	powerCycle();
+	clock->advance(2);
+	EXPECT_EQ(adapter().a2dp.connects, std::vector<std::string>{ HEADSET });
+}
+
+TEST_F(AudioReconnectGlue, UnpairingAnotherDeviceKeepsTheHeadset)
+{
+	addHeadset(HEADSET);
+	addHeadset(SPEAKER);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().unpairWorks = true;
+
+	ASSERT_TRUE(succeeded(luna("/adapter", "unpair", std::string("{\"address\":\"") + SPEAKER + "\"}")));
+	powerCycle();
+	clock->advance(2);
+	EXPECT_EQ(adapter().a2dp.connects, std::vector<std::string>{ HEADSET });
+}
+
+// Removed from BlueZ behind the service's back (bluetoothctl remove). That
+// looks the same to the service as a chip reset, whose devices come back
+// after the adapter, so the attempts wait for it as long as they last; one
+// still unknown at the last of them is gone for good, and forgotten instead
+// of being tried at every power-on again.
+TEST_F(AudioReconnectGlue, AHeadsetBlueZNoLongerKnowsIsForgottenAtTheLastAttempt)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().removeDevice(HEADSET);
+
+	powerCycle();
+	clock->advance(2 + 10);
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos) << "not before the last attempt";
+	clock->advance(30);
+	EXPECT_EQ(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+	EXPECT_EQ(clock->waits, (std::vector<unsigned int>{ 2, 10, 30 }));
+	EXPECT_EQ(clock->pending(), 0U);
+
+	powerCycle();
+	clock->advance(100);
+	EXPECT_EQ(clock->waits, (std::vector<unsigned int>{ 2, 10, 30 })) << "no attempts at the next power-on";
+	EXPECT_TRUE(adapter().a2dp.connects.empty());
+}
+
+// The chip-reset case: the device is back by the last attempt, and connected.
+TEST_F(AudioReconnectGlue, ADeviceFoundOnlyByTheLastAttemptIsStillConnected)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+
+	stopService();
+	ASSERT_NO_FATAL_FAILURE(startService());
+	adapter().power(true);
+	clock->advance(2 + 10);
+	EXPECT_TRUE(adapter().a2dp.connects.empty());
+	addHeadset(HEADSET);
+	clock->advance(30);
+	EXPECT_EQ(adapter().a2dp.connects, std::vector<std::string>{ HEADSET });
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos);
+}
+
+// A headset that is there but does not answer (switched off) is kept: only
+// one BlueZ does not know is forgotten (G5-6).
+TEST_F(AudioReconnectGlue, AHeadsetThatDoesNotAnswerIsKeptAfterTheLastAttempt)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().a2dp.connectAnswer = gluesil::Answer::FAIL;
+
+	powerCycle();
+	clock->advance(100);
+	EXPECT_EQ(adapter().a2dp.connects.size(), 3U);
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos);
+}
+
 TEST_F(AudioReconnectGlue, PoweredAgainBeforeTheAttemptsAreDoneStartsOver)
 {
 	addHeadset(HEADSET);
