@@ -463,6 +463,16 @@ TEST_F(AudioReconnectGlue, A2dpConnectedAgainWhileHfpStayedUpRemembersBoth)
 	          std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
 }
 
+// A profile the headset offers but did not connect is not remembered.
+TEST_F(AudioReconnectGlue, OnlyTheProfilesUpAreRemembered)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	EXPECT_NE(readFile(AUDIO_RECONNECT_FILE).find(std::string(gluesil::ADAPTER) + " " + HEADSET + " a2dp\n"),
+	          std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+}
+
 // An HFP link to a device that offers no hands-free unit (this phone is its
 // headset) is not one of the headset's profiles to remember.
 TEST_F(AudioReconnectGlue, AnHfpLinkOfADeviceWithoutHandsFreeIsNotRemembered)

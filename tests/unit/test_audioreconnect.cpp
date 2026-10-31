@@ -125,6 +125,14 @@ TEST(AudioReconnect, EveryProfileConnectedTogetherIsRemembered)
 	EXPECT_FALSE(r.connected(kAdapter, kNura, AudioReconnect::HFP));
 }
 
+TEST(AudioReconnect, AProfileNewAmongThoseConnectedIsAdded)
+{
+	AudioReconnect r;
+	r.connected(kAdapter, kNura, AudioReconnect::A2DP);
+	EXPECT_TRUE(r.connected(kAdapter, kNura, kBoth));
+	EXPECT_EQ(r.target(kAdapter).profiles, kBoth);
+}
+
 // hfp/disconnect forgot it while its A2DP stayed up; hfp/connect then
 // connects HFP with A2DP still up.
 TEST(AudioReconnect, ConnectedAgainAfterAUserDisconnectItComesBackWithAllItHasUp)
