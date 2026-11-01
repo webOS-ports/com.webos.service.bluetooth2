@@ -19,6 +19,7 @@
 #define BLUETOOTH_MANAGER_H_
 
 #include <map>
+#include <memory>
 #include <string>
 #include <sstream>
 #include <unordered_map>
@@ -38,6 +39,7 @@ class BluetoothDevice;
 class BluetoothServiceClassInfo;
 class BluetoothGattAncsProfile;
 class BluetoothManagerAdapter;
+class BluetoothAudioReconnect;
 
 #ifdef MULTI_SESSION_SUPPORT
 /*3 containers + 1 host*/
@@ -122,6 +124,8 @@ public:
 	std::string getMessageOwner(LSMessage *message);
 	int getAdvSize(AdvertiseData advData, bool flagRequired);
 	bool isValidAddress(std::string& address);
+	//! Brings the audio device used last back when an adapter comes up.
+	BluetoothAudioReconnect *getAudioReconnect() const { return mAudioReconnect.get(); }
 #ifdef MULTI_SESSION_SUPPORT
 	std::unordered_map<std::string, BluetoothManagerAdapter*> getAvailableBluetoothAdapters() { return mAdaptersInfo; }
 #endif
@@ -234,7 +238,9 @@ private:
 	LS::SubscriptionPoint mGetKeepAliveStatusSubscriptions;
 
 	BluetoothGattAncsProfile *mGattAnsc;
+	std::unique_ptr<BluetoothAudioReconnect> mAudioReconnect;
 	friend class BluetoothManagerAdapter;
+	friend class BluetoothAudioReconnect;
 };
 
 #endif
