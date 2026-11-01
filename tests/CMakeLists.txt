@@ -50,6 +50,34 @@ target_link_libraries(webos-bluetooth-service-tests
 
 add_test(NAME webos-bluetooth-service-unit COMMAND webos-bluetooth-service-tests)
 
+# The audio reconnect on the real manager and profile services (tests/glue): a SIL and a Luna bus in the test
+# process, and a clock the test moves. fakels.cpp's luna-service2 calls are found before the library's; the
+# service's SIL factory loads glue-sil.so from the build directory (or $GLUE_SIL_DIR), which calls back into the test, so the test
+# exports its symbols.
+add_executable(webos-bluetooth-service-glue-tests
+    glue/test_audioreconnect_glue.cpp glue/fakesil.cpp glue/fakels.cpp unit/support.cpp ${COMPONENT_SOURCES})
+target_include_directories(webos-bluetooth-service-glue-tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_BINARY_DIR}/Configured/src
+)
+target_compile_definitions(webos-bluetooth-service-glue-tests PRIVATE
+    AUDIO_RECONNECT_FILE="bt-test-audioReconnect.txt"
+    GLUE_SIL_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+)
+set_target_properties(webos-bluetooth-service-glue-tests PROPERTIES ENABLE_EXPORTS ON)
+target_link_libraries(webos-bluetooth-service-glue-tests
+    ${GTEST_MAIN_LIBRARY} ${GTEST_LIBRARY}
+    ${GLIB2_LDFLAGS} ${LUNASERVICE2_LDFLAGS} ${PBNJSON_CXX_LDFLAGS}
+    ${GIO2_LDFLAGS} ${GIO-UNIX_LDFLAGS} ${PMLOG_LDFLAGS}
+    rt pthread dl luna-service2++ ${EXT_LIBS})
+
+add_library(glue-sil MODULE glue/silmodule.cpp)
+set_target_properties(glue-sil PROPERTIES PREFIX "")
+target_link_options(glue-sil PRIVATE -Wl,-z,undefs)
+add_dependencies(webos-bluetooth-service-glue-tests glue-sil)
+
+add_test(NAME webos-bluetooth-service-glue COMMAND webos-bluetooth-service-glue-tests)
+
 # A SIL with no Bluetooth behind it, for driving the service through scenarios (tests/scenarios). Loaded with
 # WEBOS_BLUETOOTH_SIL=fake WEBOS_BLUETOOTH_SIL_BASE_PATH=<its directory>.
 add_library(fake MODULE fakesil/fakesil.cpp)

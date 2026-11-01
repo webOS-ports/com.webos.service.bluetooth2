@@ -26,6 +26,7 @@
 #include "ls2utils.h"
 #include "clientwatch.h"
 #include "bluetoothprofileservice.h"
+#include "bluetoothaudioreconnect.h"
 
 using namespace std::placeholders;
 
@@ -262,6 +263,11 @@ void BluetoothManagerAdapter::adapterStateChanged(bool powered)
 	}
 
 	mBluetoothManagerService->notifySubscribersAboutStateChange();
+
+	// The headset is not brought back by BlueZ after the stack or the chip
+	// restarted, or the adapter was switched off and on: see audioreconnect.h.
+	if (powered && mBluetoothManagerService->getAudioReconnect())
+		mBluetoothManagerService->getAudioReconnect()->adapterPowered(mAddress);
 }
 
 void BluetoothManagerAdapter::adapterHciTimeoutOccurred()
@@ -1787,7 +1793,7 @@ bool BluetoothManagerAdapter::unpair(LS::Message &request, pbnjson::JValue &requ
 	LSMessage *requestMessage = request.get();
 	LSMessageRef(requestMessage);
 
-	auto unpairCallback = [requestMessage, this](BluetoothError error) {
+	auto unpairCallback = [requestMessage, this, address](BluetoothError error) {
 		if (error != BLUETOOTH_ERROR_NONE)
 		{
 			// Without this adapter's members: it may be gone with its controller by now.
@@ -1795,6 +1801,10 @@ bool BluetoothManagerAdapter::unpair(LS::Message &request, pbnjson::JValue &requ
 			LSMessageUnref(requestMessage);	// was referenced above and leaked on failure
 			return;
 		}
+
+		// Not to be connected again at the next power-on (G5-5).
+		if (mBluetoothManagerService->getAudioReconnect())
+			mBluetoothManagerService->getAudioReconnect()->deviceUnpaired(mAddress, address);
 
 		pbnjson::JValue responseObj = pbnjson::Object();
 		responseObj.put("returnValue", true);

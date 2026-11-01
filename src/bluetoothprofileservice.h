@@ -18,6 +18,7 @@
 #ifndef BLUETOOTH_PROFILE_SERVICE_H_
 #define BLUETOOTH_PROFILE_SERVICE_H_
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <map>
@@ -67,6 +68,14 @@ public:
 	bool isDeviceConnecting(const std::string &address);
 	bool isDeviceConnecting(const std::string &adapterAddress, const std::string &address);
 	bool isDeviceMarkedForLocalDisconnect(const std::string &adapterAddress, const std::string &address);
+
+	//! Connects this profile to address on adapter on the service's own
+	//! account, for no Luna client: an audio device brought back when the
+	//! adapter came up (bluetoothaudioreconnect.h). Connecting shows in
+	//! getStatus as for a client. done gets the SIL's answer. False, and done
+	//! is not called, if the profile is not there for that adapter (yet).
+	bool connectAgain(const std::string &adapterAddress, const std::string &address,
+	                  std::function<void(BluetoothError)> done);
 
 public:
 	virtual bool connect(LSMessage &message);

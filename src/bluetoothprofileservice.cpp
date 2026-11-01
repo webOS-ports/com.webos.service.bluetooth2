@@ -18,6 +18,7 @@
 #include <bluetooth-sil-api.h>
 
 #include "bluetoothprofileservice.h"
+#include "bluetoothaudioreconnect.h"
 #include "bluetoothmanagerservice.h"
 #include "bluetoothdevice.h"
 #include "bluetoothserviceclasses.h"
@@ -356,6 +357,7 @@ void BluetoothProfileService::propertiesChanged(const std::string &adapterAddres
 		switch (prop.getType())
 		{
 		case BluetoothProperty::Type::CONNECTED:
+		{
 			connected = prop.getValue<bool>();
 
 			if (!connected)
@@ -375,14 +377,22 @@ void BluetoothProfileService::propertiesChanged(const std::string &adapterAddres
 			// When we switch from connected to disconnected we always just try to
 			// remove all subscription. Called method will just return when subscriptions
 			// are not available for the specified device.
+			bool localdisconnect = false;
 			if (!connected)
 			{
-				bool localdisconnect = isDeviceMarkedForLocalDisconnect(convertToLower(adapterAddress), convertToLower(address));
+				localdisconnect = isDeviceMarkedForLocalDisconnect(convertToLower(adapterAddress), convertToLower(address));
 				removeConnectWatchForDevice(convertToLower(adapterAddress), convertToLower(address), !connected , !localdisconnect);
 				removeDeviceFromLocalDisconnecting(convertToLower(adapterAddress), convertToLower(address));
 			}
 
+			// The audio device to bring back when the adapter comes up, and
+			// forgetting it when the user disconnected it here.
+			if (getManager()->getAudioReconnect())
+				getManager()->getAudioReconnect()->profileConnectionChanged(getName(), adapterAddress, address,
+				                                                             connected, localdisconnect);
+
 			break;
+		}
 		default:
 			break;
 		}
@@ -741,12 +751,43 @@ void BluetoothProfileService::disconnectToStack(LS::Message &request, pbnjson::J
 		removeConnectWatchForDevice(adapterAddress, address, true, false);
 		markDeviceAsNotConnected(adapterAddress, address);
 		markDeviceAsNotConnecting(adapterAddress, address);
+		// Asked for by a client: the user does not want it back by itself.
+		// The SIL's CONNECTED may have come first, and found the mark gone.
+		if (getManager()->getAudioReconnect())
+			getManager()->getAudioReconnect()->profileConnectionChanged(getName(), adapterAddress, address,
+			                                                             false, true);
 		LSMessageUnref(request.get());
 	};
 
 	BT_INFO("PROFILE", 0, "Service calls SIL API : disconnect to %s", address.c_str());
 	markDeviceAsLocalDisconnecting(adapterAddress, address);
 	impl->disconnect(address, disconnectCallback);
+}
+
+bool BluetoothProfileService::connectAgain(const std::string &adapterAddress, const std::string &address,
+                                           std::function<void(BluetoothError)> done)
+{
+	BluetoothProfile *impl = findImpl(adapterAddress);
+	if (!impl)
+		return false;
+
+	markDeviceAsConnecting(adapterAddress, address);
+	notifyStatusSubscribers(adapterAddress, address, false);
+
+	impl->connect(address, [this, adapterAddress, address, done](BluetoothError error) {
+		if (error == BLUETOOTH_ERROR_NONE)
+		{
+			// The SIL's CONNECTED says so too, and clears connecting.
+			markDeviceAsConnected(adapterAddress, address);
+		}
+		else
+		{
+			markDeviceAsNotConnecting(adapterAddress, address);
+			notifyStatusSubscribers(adapterAddress, address, false);
+		}
+		done(error);
+	});
+	return true;
 }
 
 bool BluetoothProfileService::disconnect(LSMessage &message)
