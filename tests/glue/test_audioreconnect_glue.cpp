@@ -783,3 +783,87 @@ TEST_F(AudioReconnectGlue, PoweredAgainBeforeTheAttemptsAreDoneStartsOver)
 }
 
 }
+
+// A pairing a phone starts with no passkey to compare ("Just Works", RequestAuthorization in BlueZ): the client
+// waiting on awaitPairingRequests is asked, and its answer goes back to the SIL.
+TEST_F(AudioReconnectGlue, AJustWorksPairingIsPutToTheClientWaitingForPairings)
+{
+	const std::string phone = "00:aa:bb:cc:dd:03";
+	adapter().power(true);
+	adapter().addDevice(phone, false, {});
+	pump();
+	ASSERT_TRUE(succeeded(luna("/adapter", "awaitPairingRequests", "{\"subscribe\":true}")));
+
+	adapter().getObserver()->requestPairingAuthorization(phone);
+	pump();
+
+	const std::vector<std::string> posts = fakels::posts("/adapter", "awaitPairingRequests");
+	auto asked = std::find_if(posts.begin(), posts.end(), [](const std::string &post) {
+		return post.find("\"request\":\"authorizePairing\"") != std::string::npos;
+	});
+	ASSERT_NE(asked, posts.end()) << "the client was not asked";
+	EXPECT_NE(asked->find(phone), std::string::npos) << *asked;
+	EXPECT_TRUE(adapter().confirmations.empty()) << "answered before the client was";
+
+	ASSERT_TRUE(succeeded(luna("/adapter", "supplyPasskeyConfirmation",
+	                           "{\"address\":\"" + phone + "\",\"accept\":true}")));
+	ASSERT_EQ(adapter().confirmations.size(), 1u);
+	EXPECT_EQ(adapter().confirmations[0], std::make_pair(phone, true));
+}
+
+// With no client to ask, the pairing is refused at once instead of left to BlueZ's timeout.
+TEST_F(AudioReconnectGlue, AJustWorksPairingNobodyCanBeAskedIsRefused)
+{
+	const std::string phone = "00:aa:bb:cc:dd:03";
+	adapter().power(true);
+	adapter().addDevice(phone, false, {});
+	pump();
+
+	adapter().getObserver()->requestPairingAuthorization(phone);
+	pump();
+
+	ASSERT_EQ(adapter().confirmations.size(), 1u);
+	EXPECT_EQ(adapter().confirmations[0], std::make_pair(phone, false));
+}
+
+// A passkey to compare that nobody can be shown (no client waits on awaitPairingRequests): refused at once,
+// not left to BlueZ's timeout - and never accepted.
+TEST_F(AudioReconnectGlue, APasskeyNobodyCanBeShownIsRefused)
+{
+	const std::string phone = "00:aa:bb:cc:dd:03";
+	adapter().power(true);
+	adapter().addDevice(phone, false, {});
+	pump();
+
+	adapter().getObserver()->displayPairingConfirmation(phone, 123456);
+	pump();
+
+	ASSERT_EQ(adapter().confirmations.size(), 1u);
+	EXPECT_EQ(adapter().confirmations[0], std::make_pair(phone, false));
+}
+
+// The same passkey with a client waiting: it is shown, and only the client's answer goes to the SIL.
+TEST_F(AudioReconnectGlue, APasskeyIsPutToTheClientWaitingForPairings)
+{
+	const std::string phone = "00:aa:bb:cc:dd:03";
+	adapter().power(true);
+	adapter().addDevice(phone, false, {});
+	pump();
+	ASSERT_TRUE(succeeded(luna("/adapter", "awaitPairingRequests", "{\"subscribe\":true}")));
+
+	adapter().getObserver()->displayPairingConfirmation(phone, 123456);
+	pump();
+
+	const std::vector<std::string> posts = fakels::posts("/adapter", "awaitPairingRequests");
+	auto asked = std::find_if(posts.begin(), posts.end(), [](const std::string &post) {
+		return post.find("\"request\":\"confirmPasskey\"") != std::string::npos;
+	});
+	ASSERT_NE(asked, posts.end()) << "the client was not asked";
+	EXPECT_NE(asked->find("123456"), std::string::npos) << *asked;
+	EXPECT_TRUE(adapter().confirmations.empty()) << "answered before the client was";
+
+	ASSERT_TRUE(succeeded(luna("/adapter", "supplyPasskeyConfirmation",
+	                           "{\"address\":\"" + phone + "\",\"accept\":false}")));
+	ASSERT_EQ(adapter().confirmations.size(), 1u);
+	EXPECT_EQ(adapter().confirmations[0], std::make_pair(phone, false));
+}

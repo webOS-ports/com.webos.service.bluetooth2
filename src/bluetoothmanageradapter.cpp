@@ -1937,6 +1937,50 @@ void BluetoothManagerAdapter::displayPairingConfirmation(const std::string &addr
 	}
 	else
 	{
+		// Nobody to ask: refuse now rather than leave BlueZ waiting for its timeout.
+		getAdapter()->supplyPairingConfirmation(address, false);
+		stopPairing();
+	}
+}
+
+/*
+ * A pairing with no passkey to compare ("Just Works"). The client allows or refuses
+ * it with supplyPasskeyConfirmation, as a passkey it was shown.
+ */
+void BluetoothManagerAdapter::requestPairingAuthorization(const std::string &address)
+{
+	BT_DEBUG("Received pairing authorization request from SIL for address %s", address.c_str());
+
+	pbnjson::JValue responseObj = pbnjson::Object();
+	responseObj.put("request", "authorizePairing");
+
+	// If we're not pairing yet then this is a pairing request from a remote device
+	if (!getPairState().isPairing())
+	{
+		beginIncomingPair(address);
+		responseObj.put("address", address);
+	}
+
+	responseObj.put("adapterAddress", mAddress);
+	responseObj.put("subscribed", true);
+	responseObj.put("returnValue", true);
+
+	if (getPairState().isIncoming() && mIncomingPairingWatch)
+	{
+		auto device = findDevice(address);
+		if (device)
+			responseObj.put("name", device->getName());
+
+		LSUtils::postToClient(mIncomingPairingWatch->getMessage(), responseObj);
+	}
+	else if (getPairState().isOutgoing() && mOutgoingPairingWatch)
+	{
+		LSUtils::postToClient(mOutgoingPairingWatch->getMessage(), responseObj);
+	}
+	else
+	{
+		// Nobody to ask: refuse now rather than leave BlueZ waiting for its timeout.
+		getAdapter()->supplyPairingConfirmation(address, false);
 		stopPairing();
 	}
 }

@@ -93,6 +93,9 @@ class Adapter : public BluetoothAdapter
 public:
 	Adapter();
 
+	//! The service's observer, for a test to report what the stack would.
+	using BluetoothAdapter::getObserver;
+
 	A2dp a2dp;
 	Hfp hfp;
 
@@ -108,7 +111,11 @@ public:
 	void setDeviceProperty(const std::string &, const BluetoothProperty &, BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
 	void setDeviceProperties(const std::string &, const BluetoothPropertiesList &, BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
 	void pair(const std::string &, BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_FAIL); }
-	BluetoothError supplyPairingConfirmation(const std::string &, bool) override { return BLUETOOTH_ERROR_NONE; }
+	BluetoothError supplyPairingConfirmation(const std::string &address, bool accept) override
+	{
+		confirmations.push_back({address, accept});
+		return BLUETOOTH_ERROR_NONE;
+	}
 	BluetoothError supplyPairingSecret(const std::string &, const std::string &) override { return BLUETOOTH_ERROR_NONE; }
 	BluetoothError supplyPairingSecret(const std::string &, BluetoothPasskey) override { return BLUETOOTH_ERROR_NONE; }
 	//! As bluez5's RemoveDevice: when unpairWorks, the device's profiles go down, the device goes, then the answer.
@@ -131,6 +138,8 @@ public:
 	void removeDevice(const std::string &address);
 
 	bool unpairWorks = false;
+	//! Every supplyPairingConfirmation(), in order: the device and the answer.
+	std::vector<std::pair<std::string, bool>> confirmations;
 
 private:
 	std::map<std::string, BluetoothPropertiesList> mDevices;

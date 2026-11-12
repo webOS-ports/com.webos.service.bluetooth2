@@ -73,6 +73,7 @@ public:
 	void displayPairingSecret(const std::string &address, const std::string &pin);
 	void displayPairingSecret(const std::string &address, BluetoothPasskey passkey);
 	void displayPairingConfirmation(const std::string &address, BluetoothPasskey passkey);
+	void requestPairingAuthorization(const std::string &address);
 	void pairingCanceled();
 	void abortPairing(bool incoming);
 	void leConnectionRequest(const std::string &address, bool state);
