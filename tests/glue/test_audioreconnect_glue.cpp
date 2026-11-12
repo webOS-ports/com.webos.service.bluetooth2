@@ -867,3 +867,109 @@ TEST_F(AudioReconnectGlue, APasskeyIsPutToTheClientWaitingForPairings)
 	ASSERT_EQ(adapter().confirmations.size(), 1u);
 	EXPECT_EQ(adapter().confirmations[0], std::make_pair(phone, false));
 }
+
+// /device/connect: the device as a whole, through the SIL's connectDevice; what came up is what the audio
+// reconnect remembers, as when the profiles were connected one by one.
+TEST_F(AudioReconnectGlue, DeviceConnectConnectsTheWholeDevice)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+
+	const fakels::Reply reply = luna("/device", "connect", std::string("{\"address\":\"") + HEADSET + "\"}");
+	ASSERT_TRUE(succeeded(reply)) << (reply.payloads.empty() ? "no answer" : reply.payloads.front());
+	EXPECT_NE(reply.payloads.front().find(HEADSET), std::string::npos) << reply.payloads.front();
+	EXPECT_EQ(adapter().deviceConnects, std::vector<std::string>{ HEADSET });
+	EXPECT_TRUE(adapter().a2dp.connects.empty()) << "connected profile by profile";
+
+	adapter().a2dp.remote(HEADSET, false);	// went away by itself
+	adapter().hfp.remote(HEADSET, false);
+	powerCycle();
+	clock->advance(2);
+	EXPECT_EQ(adapter().a2dp.connects, std::vector<std::string>{ HEADSET });
+}
+
+TEST_F(AudioReconnectGlue, DeviceConnectThatFailsAnswersAnError)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().deviceConnectWorks = false;
+
+	const fakels::Reply reply = luna("/device", "connect", std::string("{\"address\":\"") + HEADSET + "\"}");
+	ASSERT_FALSE(reply.payloads.empty()) << "no answer";
+	EXPECT_FALSE(succeeded(reply));
+	EXPECT_NE(reply.payloads.front().find("\"errorCode\":130"), std::string::npos) << reply.payloads.front();
+}
+
+TEST_F(AudioReconnectGlue, DeviceConnectAndDisconnectWantADeviceTheAdapterKnows)
+{
+	adapter().power(true);
+	for (const char *method : { "connect", "disconnect" })
+	{
+		SCOPED_TRACE(method);
+		EXPECT_FALSE(succeeded(luna("/device", method, "{}")));
+		EXPECT_FALSE(succeeded(luna("/device", method, "{\"address\":1}")));
+		EXPECT_FALSE(succeeded(luna("/device", method, std::string("{\"address\":\"") + HEADSET + "\"}")));
+	}
+	EXPECT_TRUE(adapter().deviceConnects.empty());
+	EXPECT_TRUE(adapter().deviceDisconnects.empty());
+}
+
+// /device/disconnect is the user's: the headset is not connected again at the next power-on, though each
+// profile reported its link going down as a link loss would.
+TEST_F(AudioReconnectGlue, TheUserDisconnectingTheDeviceForgetsTheHeadset)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().hfp.remote(HEADSET, true);
+
+	const fakels::Reply reply = luna("/device", "disconnect", std::string("{\"address\":\"") + HEADSET + "\"}");
+	ASSERT_TRUE(succeeded(reply)) << (reply.payloads.empty() ? "no answer" : reply.payloads.front());
+	EXPECT_EQ(adapter().deviceDisconnects, std::vector<std::string>{ HEADSET });
+	EXPECT_EQ(readFile(AUDIO_RECONNECT_FILE).find(HEADSET), std::string::npos) << readFile(AUDIO_RECONNECT_FILE);
+
+	powerCycle();
+	clock->advance(100);
+	EXPECT_TRUE(clock->waits.empty()) << "nothing left to connect";
+	EXPECT_TRUE(adapter().a2dp.connects.empty());
+	EXPECT_TRUE(adapter().hfp.connects.empty());
+}
+
+TEST_F(AudioReconnectGlue, ADeviceDisconnectThatFailsKeepsTheHeadset)
+{
+	addHeadset(HEADSET);
+	adapter().power(true);
+	adapter().a2dp.remote(HEADSET, true);
+	adapter().deviceConnectWorks = false;
+
+	EXPECT_FALSE(succeeded(luna("/device", "disconnect", std::string("{\"address\":\"") + HEADSET + "\"}")));
+	adapter().a2dp.remote(HEADSET, false);
+	powerCycle();
+	clock->advance(2);
+	EXPECT_EQ(adapter().a2dp.connects, std::vector<std::string>{ HEADSET });
+}
+
+// device/getStatus says whether the link is up, as BlueZ's Connected: also for a device none of the service's
+// profiles has connected (a keyboard, say), which connectedProfiles leaves empty.
+TEST_F(AudioReconnectGlue, DeviceStatusSaysWhetherTheLinkIsUp)
+{
+	const std::string keyboard = "00:aa:bb:cc:dd:04";
+	adapter().power(true);
+	adapter().addDevice(keyboard, true, {});
+	pump();
+
+	// The keyboard is the adapter's only device.
+	auto status = [&]() {
+		const fakels::Reply reply = luna("/device", "getStatus", "{}");
+		return reply.payloads.empty() ? std::string() : reply.payloads.front();
+	};
+	ASSERT_NE(status().find(keyboard), std::string::npos) << status();
+	EXPECT_NE(status().find("\"connected\":false"), std::string::npos) << status();
+
+	BluetoothPropertiesList properties;
+	properties.push_back(BluetoothProperty(BluetoothProperty::Type::CONNECTED, true));
+	adapter().getObserver()->devicePropertiesChanged(keyboard, properties);
+	pump();
+	EXPECT_NE(status().find("\"connected\":true"), std::string::npos) << status();
+	EXPECT_NE(status().find("\"connectedProfiles\":[]"), std::string::npos) << status();
+}

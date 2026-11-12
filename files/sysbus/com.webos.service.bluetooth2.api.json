@@ -61,6 +61,8 @@
         "com.webos.service.bluetooth2/hfp/connect",
         "com.webos.service.bluetooth2/hfp/disconnect",
         "com.webos.service.bluetooth2/device/setState",
+        "com.webos.service.bluetooth2/device/connect",
+        "com.webos.service.bluetooth2/device/disconnect",
         "com.webos.service.bluetooth2/mesh/scanUnprovisionedDevices",
         "com.webos.service.bluetooth2/mesh/unprovisionedScanCancel",
         "com.webos.service.bluetooth2/mesh/createNetwork",

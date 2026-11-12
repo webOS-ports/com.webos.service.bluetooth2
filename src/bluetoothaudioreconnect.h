@@ -82,6 +82,10 @@ public:
 	//! not bring it back.
 	void deviceUnpaired(const std::string &adapterAddress, const std::string &address);
 
+	//! A client disconnected the whole device through this service
+	//! (/device/disconnect): do not bring it back.
+	void deviceDisconnectedByUser(const std::string &adapterAddress, const std::string &address);
+
 	//! The adapter has been powered on: connect the device it had last, once
 	//! the adapter and the device are ready for it.
 	void adapterPowered(const std::string &adapterAddress);

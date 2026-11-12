@@ -144,6 +144,8 @@ BluetoothManagerService::BluetoothManagerService() :
 		LS_CATEGORY_MAPPED_METHOD(getDiscoveredDevice, getDiscoveredDeviceStatus)
 		LS_CATEGORY_MAPPED_METHOD(getStatus, getDeviceStatus)
 		LS_CATEGORY_MAPPED_METHOD(setState, setDeviceState)
+		LS_CATEGORY_MAPPED_METHOD(connect, connectDevice)
+		LS_CATEGORY_MAPPED_METHOD(disconnect, disconnectDevice)
 	LS_CREATE_CATEGORY_END
 
 	LS_CREATE_CATEGORY_BEGIN(BluetoothManagerService, device_internal)
@@ -1727,6 +1729,63 @@ bool BluetoothManagerService::unpair(LSMessage &message)
 	auto adapter = findAdapterInfo(adapterAddress);
 
 	return adapter->unpair(request, requestObj);
+}
+
+/*
+ * /device/connect and /device/disconnect: the device as a whole, as the user
+ * picks it from a list - every profile both ends have (BlueZ's Device1.Connect),
+ * where /a2dp/connect and the like take one profile. LuneOS addition.
+ *
+ *   {"address": string, "adapterAddress": string (optional)}
+ *   -> {"returnValue": true, "adapterAddress": string, "address": string}
+ */
+static bool parseDeviceAddressRequest(LS::Message &request, pbnjson::JValue &requestObj)
+{
+	int parseError = 0;
+	const std::string schema = STRICT_SCHEMA(PROPS_2(PROP(address, string), PROP(adapterAddress, string)) REQUIRED_1(address));
+
+	if (LSUtils::parsePayload(request.getPayload(), requestObj, schema, &parseError))
+		return true;
+
+	if (parseError != JSON_PARSE_SCHEMA_ERROR)
+		LSUtils::respondWithError(request, BT_ERR_BAD_JSON);
+	else if (!requestObj.hasKey("address"))
+		LSUtils::respondWithError(request, BT_ERR_ADDR_PARAM_MISSING);
+	else
+		LSUtils::respondWithError(request, BT_ERR_SCHEMA_VALIDATION_FAIL);
+	return false;
+}
+
+bool BluetoothManagerService::connectDevice(LSMessage &message)
+{
+	BT_INFO("MANAGER_SERVICE", 0, "Luna API is called : [%s : %d]", __FUNCTION__, __LINE__);
+
+	LS::Message request(&message);
+	pbnjson::JValue requestObj;
+	if (!parseDeviceAddressRequest(request, requestObj))
+		return true;
+
+	std::string adapterAddress;
+	if (!isRequestedAdapterAvailable(request, requestObj, adapterAddress))
+		return true;
+
+	return findAdapterInfo(adapterAddress)->connectDevice(request, requestObj);
+}
+
+bool BluetoothManagerService::disconnectDevice(LSMessage &message)
+{
+	BT_INFO("MANAGER_SERVICE", 0, "Luna API is called : [%s : %d]", __FUNCTION__, __LINE__);
+
+	LS::Message request(&message);
+	pbnjson::JValue requestObj;
+	if (!parseDeviceAddressRequest(request, requestObj))
+		return true;
+
+	std::string adapterAddress;
+	if (!isRequestedAdapterAvailable(request, requestObj, adapterAddress))
+		return true;
+
+	return findAdapterInfo(adapterAddress)->disconnectDevice(request, requestObj);
 }
 
 bool BluetoothManagerService::awaitPairingRequests(LSMessage &message)

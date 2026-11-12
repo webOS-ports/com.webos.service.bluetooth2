@@ -121,6 +121,10 @@ public:
 	//! As bluez5's RemoveDevice: when unpairWorks, the device's profiles go down, the device goes, then the answer.
 	void unpair(const std::string &address, BluetoothResultCallback callback) override;
 	void cancelPairing(const std::string &, BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
+	//! As bluez5's Device1.Connect/Disconnect: when deviceConnectWorks, every profile of the device comes up (goes
+	//! down), then the answer.
+	void connectDevice(const std::string &address, BluetoothResultCallback callback) override;
+	void disconnectDevice(const std::string &address, BluetoothResultCallback callback) override;
 	void startAdvertising(BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
 	void stopAdvertising(BluetoothResultCallback callback) override { callback(BLUETOOTH_ERROR_NONE); }
 	BluetoothError updateFirmware(const std::string &, const std::string &, const std::string &, bool) override { return BLUETOOTH_ERROR_UNSUPPORTED; }
@@ -138,6 +142,10 @@ public:
 	void removeDevice(const std::string &address);
 
 	bool unpairWorks = false;
+	bool deviceConnectWorks = true;
+	//! Every connectDevice() and disconnectDevice(), in order.
+	std::vector<std::string> deviceConnects;
+	std::vector<std::string> deviceDisconnects;
 	//! Every supplyPairingConfirmation(), in order: the device and the answer.
 	std::vector<std::pair<std::string, bool>> confirmations;
 

@@ -96,6 +96,8 @@ public:
 	bool getDiscoveredDeviceStatus(LS::Message &request, pbnjson::JValue &requestObj);
 	bool getDeviceStatus(LS::Message &request, pbnjson::JValue &requestObj);
 	bool setDeviceState(LS::Message &request, pbnjson::JValue &requestObj);
+	bool connectDevice(LS::Message &request, pbnjson::JValue &requestObj);
+	bool disconnectDevice(LS::Message &request, pbnjson::JValue &requestObj);
 
 	void handleStatePropertiesSet(BluetoothPropertiesList properties, LS::Message &request, BluetoothError error);
 	void handleDeviceStatePropertiesSet(BluetoothPropertiesList properties, const std::string &deviceAddress, LS::Message &request, BluetoothError error);

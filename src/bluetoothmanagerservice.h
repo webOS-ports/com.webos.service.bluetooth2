@@ -143,6 +143,8 @@ private:
 	bool getDiscoveredDeviceStatus(LSMessage &message);
 	bool getDeviceStatus(LSMessage &message);
 	bool setDeviceState(LSMessage &msg);
+	bool connectDevice(LSMessage &message);
+	bool disconnectDevice(LSMessage &message);
 	bool pair(LSMessage &message);
 	bool unpair(LSMessage &message);
 	bool supplyPasskey(LSMessage &message);

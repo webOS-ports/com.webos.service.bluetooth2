@@ -205,6 +205,32 @@ void Adapter::unpair(const std::string &address, BluetoothResultCallback callbac
 	callback(BLUETOOTH_ERROR_NONE);
 }
 
+void Adapter::connectDevice(const std::string &address, BluetoothResultCallback callback)
+{
+	deviceConnects.push_back(address);
+	if (!deviceConnectWorks || mDevices.count(address) == 0)
+	{
+		callback(BLUETOOTH_ERROR_FAIL);
+		return;
+	}
+	a2dp.remote(address, true);
+	hfp.remote(address, true);
+	callback(BLUETOOTH_ERROR_NONE);
+}
+
+void Adapter::disconnectDevice(const std::string &address, BluetoothResultCallback callback)
+{
+	deviceDisconnects.push_back(address);
+	if (!deviceConnectWorks || mDevices.count(address) == 0)
+	{
+		callback(BLUETOOTH_ERROR_FAIL);
+		return;
+	}
+	a2dp.remote(address, false);
+	hfp.remote(address, false);
+	callback(BLUETOOTH_ERROR_NONE);
+}
+
 void Adapter::removeDevice(const std::string &address)
 {
 	if (mDevices.erase(address) == 0)

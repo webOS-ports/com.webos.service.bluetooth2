@@ -189,6 +189,17 @@ void BluetoothAudioReconnect::deviceUnpaired(const std::string &adapterAddress, 
 	}
 }
 
+void BluetoothAudioReconnect::deviceDisconnectedByUser(const std::string &adapterAddress, const std::string &address)
+{
+	// Its profiles report the disconnect as a link loss would, which keeps
+	// it; the service took them down because a client asked.
+	if (mReconnect.disconnected(adapterAddress, address, AudioReconnect::Disconnect::ByUser))
+	{
+		BT_INFO("AUDIO_RECONNECT", 0, "%s disconnected by the user, not connecting it again", address.c_str());
+		store();
+	}
+}
+
 void BluetoothAudioReconnect::adapterPowered(const std::string &adapterAddress)
 {
 	// Powered again before the last attempts are done: start over.

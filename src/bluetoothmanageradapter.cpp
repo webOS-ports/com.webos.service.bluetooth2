@@ -1194,6 +1194,9 @@ void BluetoothManagerAdapter::appendDevices(pbnjson::JValue &object)
 		deviceObj.put("trusted", device->getTrusted());
 		deviceObj.put("blocked", device->getBlocked());
 		deviceObj.put("rssi", device->getRssi());
+		// The link, as BlueZ's Device1.Connected: up with any profile, also one
+		// this service has no profile service for (connectedProfiles). LuneOS addition.
+		deviceObj.put("connected", device->getConnected());
 
 		appendConnectedRoles(deviceObj, device);
 
@@ -1816,6 +1819,82 @@ bool BluetoothManagerAdapter::unpair(LS::Message &request, pbnjson::JValue &requ
 	};
 
 	getAdapter()->unpair(address, unpairCallback);
+
+	return true;
+}
+
+/*
+ * The callbacks hold no pointer to this adapter: it may be gone with its
+ * controller by the time BlueZ answers. The manager service outlives them.
+ */
+bool BluetoothManagerAdapter::connectDevice(LS::Message &request, pbnjson::JValue &requestObj)
+{
+	const std::string address = requestObj["address"].asString();
+	if (!findDevice(address))
+	{
+		LSUtils::respondWithError(request, BT_ERR_DEVICE_NOT_AVAIL);
+		return true;
+	}
+
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+
+	auto connectCallback = [requestMessage, adapterAddress = mAddress, address](BluetoothError error) {
+		if (error != BLUETOOTH_ERROR_NONE)
+		{
+			LSUtils::respondWithError(requestMessage, BT_ERR_PROFILE_CONNECT_FAIL);
+			LSMessageUnref(requestMessage);
+			return;
+		}
+
+		pbnjson::JValue responseObj = pbnjson::Object();
+		responseObj.put("returnValue", true);
+		responseObj.put("adapterAddress", adapterAddress);
+		responseObj.put("address", address);
+		LSUtils::postToClient(requestMessage, responseObj);
+		LSMessageUnref(requestMessage);
+	};
+
+	getAdapter()->connectDevice(address, connectCallback);
+
+	return true;
+}
+
+bool BluetoothManagerAdapter::disconnectDevice(LS::Message &request, pbnjson::JValue &requestObj)
+{
+	const std::string address = requestObj["address"].asString();
+	if (!findDevice(address))
+	{
+		LSUtils::respondWithError(request, BT_ERR_DEVICE_NOT_AVAIL);
+		return true;
+	}
+
+	LSMessage *requestMessage = request.get();
+	LSMessageRef(requestMessage);
+
+	auto disconnectCallback = [requestMessage, service = mBluetoothManagerService, adapterAddress = mAddress,
+	                           address](BluetoothError error) {
+		if (error != BLUETOOTH_ERROR_NONE)
+		{
+			LSUtils::respondWithError(requestMessage, BT_ERR_PROFILE_DISCONNECT_FAIL);
+			LSMessageUnref(requestMessage);
+			return;
+		}
+
+		// Asked for by a client: the user does not want it back by itself
+		// at the next power-on, as with /a2dp/disconnect.
+		if (service->getAudioReconnect())
+			service->getAudioReconnect()->deviceDisconnectedByUser(adapterAddress, address);
+
+		pbnjson::JValue responseObj = pbnjson::Object();
+		responseObj.put("returnValue", true);
+		responseObj.put("adapterAddress", adapterAddress);
+		responseObj.put("address", address);
+		LSUtils::postToClient(requestMessage, responseObj);
+		LSMessageUnref(requestMessage);
+	};
+
+	getAdapter()->disconnectDevice(address, disconnectCallback);
 
 	return true;
 }
